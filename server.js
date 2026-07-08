@@ -828,16 +828,27 @@ http.createServer(async (req, res) => {
       const ct = req.headers["content-type"] || "";
       let body;
       try { body = ct.includes("application/json") ? JSON.parse(raw || "{}") : parseForm(raw); } catch { json(res, 400, { error: "invalid_request" }); return; }
+      console.error("[oauth/token] grant_type=", body.grant_type, "has_basic_auth=", /^Basic\s/i.test(req.headers["authorization"] || ""), "client_id=", body.client_id, "redirect_uri=", body.redirect_uri, "has_code=", !!body.code, "has_verifier=", !!body.code_verifier);
+
+      // istemci kimliği body'de yoksa HTTP Basic Auth header'ından oku (bazı istemciler public client için de Basic ile client_id gönderir)
+      if (!body.client_id) {
+        const basic = /^Basic\s+(\S+)$/i.exec(req.headers["authorization"] || "");
+        if (basic) { try { body.client_id = Buffer.from(basic[1], "base64").toString().split(":")[0]; } catch {} }
+      }
 
       if (body.grant_type === "authorization_code") {
         const codeHash = crypto.createHash("sha256").update(String(body.code || "")).digest("hex");
         const row = db.prepare("SELECT * FROM oauth_codes WHERE code_hash=?").get(codeHash);
         if (!row || row.used || row.expires < Date.now() || row.client_id !== body.client_id || row.redirect_uri !== body.redirect_uri) {
+          console.error("[oauth/token] invalid_grant — found_code=", !!row, "used=", row && row.used, "expired=", row && row.expires < Date.now(), "client_id_match=", row && row.client_id === body.client_id, "redirect_uri_match=", row && row.redirect_uri === body.redirect_uri);
           json(res, 400, { error: "invalid_grant" }); return;
         }
         const verifier = String(body.code_verifier || "");
         const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
-        if (challenge !== row.code_challenge) { json(res, 400, { error: "invalid_grant", error_description: "PKCE doğrulaması başarısız" }); return; }
+        if (challenge !== row.code_challenge) {
+          console.error("[oauth/token] PKCE mismatch");
+          json(res, 400, { error: "invalid_grant", error_description: "PKCE doğrulaması başarısız" }); return;
+        }
         db.prepare("UPDATE oauth_codes SET used=1 WHERE code_hash=?").run(codeHash);
         const access = issueToken(row.client_id, row.login_id, "access", 3600_000);
         const refresh = issueToken(row.client_id, row.login_id, "refresh", null);
