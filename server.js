@@ -63,6 +63,13 @@ CREATE TABLE IF NOT EXISTS known_devices(
   created INTEGER NOT NULL,
   last_seen INTEGER NOT NULL,
   PRIMARY KEY(user_id, device_id)
+);
+CREATE TABLE IF NOT EXISTS api_keys(
+  key_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  label TEXT,
+  created INTEGER NOT NULL,
+  last_used INTEGER
 );`);
 /* eski kurulumlardan yükseltme: session_version kolonu yoksa ekle */
 try { db.exec("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0"); } catch {}
@@ -163,6 +170,193 @@ function buildState(uid) {
 }
 const userSeq = uid => (db.prepare("SELECT seq FROM meta WHERE user_id=?").get(uid) || { seq: 0 }).seq;
 
+/* ── tekil öğe CRUD (MCP için — sync birleştirme mantığını atlar, doğrudan yazar) ── */
+function upsertItem(uid, kind, id, obj, updated) {
+  db.exec("BEGIN");
+  try {
+    let seq = (db.prepare("SELECT seq FROM meta WHERE user_id=?").get(uid) || { seq: 0 }).seq;
+    seq++;
+    db.prepare(`INSERT INTO items(user_id,kind,id,updated,deleted,seq,json) VALUES(?,?,?,?,0,?,?)
+      ON CONFLICT(user_id,kind,id) DO UPDATE SET updated=excluded.updated,deleted=0,seq=excluded.seq,json=excluded.json`)
+      .run(uid, kind, id, updated, seq, JSON.stringify(obj));
+    db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(uid, seq);
+    db.exec("COMMIT");
+  } catch (e) { db.exec("ROLLBACK"); throw e; }
+}
+function deleteItem(uid, kind, id) {
+  db.exec("BEGIN");
+  try {
+    let seq = (db.prepare("SELECT seq FROM meta WHERE user_id=?").get(uid) || { seq: 0 }).seq;
+    seq++;
+    const r = db.prepare("UPDATE items SET deleted=1, json=NULL, updated=?, seq=? WHERE user_id=? AND kind=? AND id=? AND deleted=0")
+      .run(Date.now(), seq, uid, kind, id);
+    if (r.changes) db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(uid, seq);
+    db.exec("COMMIT");
+    return !!r.changes;
+  } catch (e) { db.exec("ROLLBACK"); throw e; }
+}
+function listItems(uid, kind) {
+  return db.prepare("SELECT json FROM items WHERE user_id=? AND kind=? AND deleted=0 ORDER BY rowid").all(uid, kind).map(r => JSON.parse(r.json));
+}
+function getItemJson(uid, kind, id) {
+  const row = db.prepare("SELECT json FROM items WHERE user_id=? AND kind=? AND id=? AND deleted=0").get(uid, kind, id);
+  return row ? JSON.parse(row.json) : null;
+}
+
+/* ── MCP: API key ile kimlik doğrulama ── */
+function authMcp(req) {
+  const auth = req.headers["authorization"] || "";
+  const m = /^Bearer\s+(\S+)$/i.exec(auth);
+  if (!m) return null;
+  const hash = crypto.createHash("sha256").update(m[1]).digest("hex");
+  const row = db.prepare("SELECT * FROM api_keys WHERE key_hash=?").get(hash);
+  if (!row) return null;
+  db.prepare("UPDATE api_keys SET last_used=? WHERE key_hash=?").run(Date.now(), hash);
+  return db.prepare("SELECT * FROM users WHERE id=?").get(row.user_id) || null;
+}
+
+/* ── MCP: blok metni <-> düz metin ── */
+const stripHtml = s => String(s || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+function noteToText(n) {
+  return (n.blocks || []).map(b => {
+    const t = stripHtml(b.html);
+    if (b.type === "todo") return (b.checked ? "[x] " : "[ ] ") + t;
+    if (b.type === "bullet") return "- " + t;
+    return t;
+  }).join("\n");
+}
+function textToBlocks(text) {
+  const lines = String(text ?? "").split("\n");
+  if (!lines.length) return [{ id: crypto.randomUUID(), type: "p", html: "" }];
+  return lines.map(line => {
+    const id = crypto.randomUUID();
+    let m;
+    if ((m = /^\[( |x|X)\]\s?(.*)$/.exec(line))) return { id, type: "todo", checked: m[1].toLowerCase() === "x", html: escHtml(m[2]) };
+    if ((m = /^-\s?(.*)$/.exec(line))) return { id, type: "bullet", html: escHtml(m[1]) };
+    return { id, type: "p", html: escHtml(line) };
+  });
+}
+function noteSummary(n) {
+  return { id: n.id, title: n.title || "", type: n.type || "note", pinned: !!n.pinned, folderId: n.folderId || null, created: n.created, updated: n.updated, preview: noteToText(n).slice(0, 140) };
+}
+
+/* ── MCP: araç tanımları ve çalıştırıcılar ── */
+const MCP_TOOLS = [
+  { name: "list_notes", description: "Kullanıcının tüm notlarını (başlık, önizleme, klasör) listeler.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "get_note", description: "Bir notun tam içeriğini (düz metin olarak) getirir.", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false } },
+  { name: "create_note", description: "Yeni bir not oluşturur.", inputSchema: { type: "object", properties: { title: { type: "string" }, content: { type: "string", description: "Düz metin; '- ' ile başlayan satırlar madde, '[ ] '/'[x] ' ile başlayanlar yapılacak olarak işlenir" }, folderId: { type: "string" } }, required: ["title"], additionalProperties: false } },
+  { name: "update_note", description: "Mevcut bir notu günceller (verilmeyen alanlar değişmez).", inputSchema: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, content: { type: "string" }, folderId: { type: "string" }, pinned: { type: "boolean" } }, required: ["id"], additionalProperties: false } },
+  { name: "delete_note", description: "Bir notu siler.", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false } },
+  { name: "list_tasks", description: "Kullanıcının tüm görevlerini listeler.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "create_task", description: "Yeni bir görev oluşturur.", inputSchema: { type: "object", properties: { text: { type: "string" }, desc: { type: "string" }, due: { type: "number", description: "unix ms, opsiyonel" } }, required: ["text"], additionalProperties: false } },
+  { name: "update_task", description: "Mevcut bir görevi günceller (verilmeyen alanlar değişmez).", inputSchema: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, desc: { type: "string" }, done: { type: "boolean" }, due: { type: "number" } }, required: ["id"], additionalProperties: false } },
+  { name: "delete_task", description: "Bir görevi siler.", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false } },
+  { name: "list_folders", description: "Kullanıcının tüm klasörlerini listeler.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "create_folder", description: "Yeni bir klasör oluşturur.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"], additionalProperties: false } },
+];
+function mcpCall(uid, name, args) {
+  args = args || {};
+  const now = Date.now();
+  switch (name) {
+    case "list_notes": return listItems(uid, "note").map(noteSummary);
+    case "get_note": {
+      const n = getItemJson(uid, "note", String(args.id || ""));
+      if (!n) throw new Error("not bulunamadı");
+      return { id: n.id, title: n.title || "", type: n.type || "note", pinned: !!n.pinned, folderId: n.folderId || null, created: n.created, updated: n.updated, content: noteToText(n) };
+    }
+    case "create_note": {
+      const id = crypto.randomUUID();
+      const n = { id, title: String(args.title || ""), type: "note", pinned: false, folderId: args.folderId || null, created: now, updated: now, blocks: textToBlocks(args.content || "") };
+      upsertItem(uid, "note", id, n, now);
+      return { id };
+    }
+    case "update_note": {
+      const n = getItemJson(uid, "note", String(args.id || ""));
+      if (!n) throw new Error("not bulunamadı");
+      if (args.title !== undefined) n.title = String(args.title);
+      if (args.content !== undefined) n.blocks = textToBlocks(args.content);
+      if (args.folderId !== undefined) n.folderId = args.folderId;
+      if (args.pinned !== undefined) n.pinned = !!args.pinned;
+      n.updated = now;
+      upsertItem(uid, "note", n.id, n, now);
+      return { ok: true };
+    }
+    case "delete_note": {
+      if (!deleteItem(uid, "note", String(args.id || ""))) throw new Error("not bulunamadı");
+      return { ok: true };
+    }
+    case "list_tasks": return listItems(uid, "task");
+    case "create_task": {
+      const id = crypto.randomUUID();
+      const t = { id, text: String(args.text || ""), desc: args.desc || "", done: false, due: args.due || null, remind: !!args.due, notified: false, created: now, updated: now };
+      upsertItem(uid, "task", id, t, now);
+      return { id };
+    }
+    case "update_task": {
+      const t = getItemJson(uid, "task", String(args.id || ""));
+      if (!t) throw new Error("görev bulunamadı");
+      if (args.text !== undefined) t.text = String(args.text);
+      if (args.desc !== undefined) t.desc = String(args.desc);
+      if (args.done !== undefined) t.done = !!args.done;
+      if (args.due !== undefined) t.due = args.due;
+      t.updated = now;
+      upsertItem(uid, "task", t.id, t, now);
+      return { ok: true };
+    }
+    case "delete_task": {
+      if (!deleteItem(uid, "task", String(args.id || ""))) throw new Error("görev bulunamadı");
+      return { ok: true };
+    }
+    case "list_folders": return listItems(uid, "folder");
+    case "create_folder": {
+      const id = crypto.randomUUID();
+      const f = { id, name: String(args.name || ""), created: now, updated: now };
+      upsertItem(uid, "folder", id, f, now);
+      return { id };
+    }
+    default: throw new Error("bilinmeyen araç: " + name);
+  }
+}
+function mcpRespond(res, code, obj) {
+  res.writeHead(code, { "Content-Type": "application/json", "X-Robots-Tag": "noindex" });
+  res.end(JSON.stringify(obj));
+}
+async function handleMcp(req, res) {
+  if (req.method !== "POST") {
+    res.writeHead(405, { Allow: "POST", "Content-Type": "text/plain" });
+    res.end("Method Not Allowed — bu MCP sunucusu yalnızca POST (Streamable HTTP, SSE'siz) destekler");
+    return;
+  }
+  let msg;
+  try { msg = JSON.parse(await readBody(req)); } catch { mcpRespond(res, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Geçersiz JSON" } }); return; }
+  const { id = null, method, params } = msg || {};
+  const isNotification = id === null && method && method.startsWith("notifications/");
+  const reply = result => mcpRespond(res, 200, { jsonrpc: "2.0", id, result });
+  const replyErr = (code, message) => mcpRespond(res, 200, { jsonrpc: "2.0", id, error: { code, message } });
+
+  if (method === "initialize") {
+    reply({ protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "defter", version: "1.0.0" } });
+    return;
+  }
+  if (isNotification) { res.writeHead(202); res.end(); return; }
+  if (method === "ping") { reply({}); return; }
+
+  const user = authMcp(req);
+  if (!user) { replyErr(-32001, "Yetkisiz — geçerli bir API key ile Authorization: Bearer <key> gönder"); return; }
+
+  if (method === "tools/list") { reply({ tools: MCP_TOOLS }); return; }
+  if (method === "tools/call") {
+    try {
+      const out = mcpCall(user.id, params && params.name, params && params.arguments);
+      reply({ content: [{ type: "text", text: JSON.stringify(out) }] });
+    } catch (e) {
+      reply({ content: [{ type: "text", text: e.message }], isError: true });
+    }
+    return;
+  }
+  replyErr(-32601, "Bilinmeyen method: " + method);
+}
+
 migrate();
 
 /* ── komut satırı yönetimi: node server.js user-add|user-pass <email> <parola> ── */
@@ -178,6 +372,38 @@ if (process.argv[2] === "user-add" || process.argv[2] === "user-pass") {
     const r = db.prepare("UPDATE users SET pass_hash=?, session_version=session_version+1 WHERE email=?").run(makeHash(pass), email.toLowerCase());
     console.log(r.changes ? "parola güncellendi (tüm oturumlar kapatıldı): " + email : "kullanıcı bulunamadı: " + email);
   }
+  process.exit(0);
+}
+
+/* ── komut satırı yönetimi: MCP API key'leri ── */
+if (process.argv[2] === "mcp-key-add") {
+  const [, , , email, label] = process.argv;
+  if (!email) { console.error("kullanım: node server.js mcp-key-add <email> [etiket]"); process.exit(1); }
+  const user = db.prepare("SELECT * FROM users WHERE email=?").get(email.toLowerCase());
+  if (!user) { console.error("kullanıcı bulunamadı: " + email); process.exit(1); }
+  const key = "dft_" + crypto.randomBytes(24).toString("base64url");
+  const hash = crypto.createHash("sha256").update(key).digest("hex");
+  db.prepare("INSERT INTO api_keys(key_hash,user_id,label,created) VALUES(?,?,?,?)").run(hash, user.id, label || null, Date.now());
+  console.log("API key oluşturuldu (bir daha gösterilmeyecek, güvenli bir yere kaydet):\n" + key);
+  process.exit(0);
+}
+if (process.argv[2] === "mcp-key-list") {
+  const [, , , email] = process.argv;
+  if (!email) { console.error("kullanım: node server.js mcp-key-list <email>"); process.exit(1); }
+  const user = db.prepare("SELECT * FROM users WHERE email=?").get(email.toLowerCase());
+  if (!user) { console.error("kullanıcı bulunamadı: " + email); process.exit(1); }
+  const rows = db.prepare("SELECT key_hash,label,created,last_used FROM api_keys WHERE user_id=?").all(user.id);
+  if (!rows.length) console.log("kayıtlı API key yok");
+  for (const r of rows) console.log(`${r.key_hash.slice(0, 12)}…  etiket=${r.label || "-"}  oluşturuldu=${new Date(r.created).toISOString()}  son kullanım=${r.last_used ? new Date(r.last_used).toISOString() : "-"}`);
+  process.exit(0);
+}
+if (process.argv[2] === "mcp-key-revoke") {
+  const [, , , keyPrefix] = process.argv;
+  if (!keyPrefix || keyPrefix.length < 12) { console.error("kullanım: node server.js mcp-key-revoke <key_hash başı, en az 12 karakter>"); process.exit(1); }
+  const rows = db.prepare("SELECT key_hash FROM api_keys").all().filter(r => r.key_hash.startsWith(keyPrefix));
+  if (rows.length !== 1) { console.error(rows.length ? "birden fazla eşleşme, daha uzun bir önek ver" : "eşleşme yok"); process.exit(1); }
+  db.prepare("DELETE FROM api_keys WHERE key_hash=?").run(rows[0].key_hash);
+  console.log("API key iptal edildi");
   process.exit(0);
 }
 
@@ -328,6 +554,8 @@ http.createServer(async (req, res) => {
 
   try {
     if (p === "/healthz") { res.writeHead(200, { "Content-Type": "text/plain" }); res.end("ok"); return; }
+
+    if (p === "/mcp") { await handleMcp(req, res); return; }
 
     if (p === "/api/login" && req.method === "POST") {
       if (limited(ip)) { json(res, 429, { error: "Çok fazla deneme — 1 dakika bekle" }); return; }
