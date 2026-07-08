@@ -648,10 +648,20 @@ function getCookiesByPrefix(req, prefix) {
 /* ── giriş kimliği (login) ↔ proje ── tek login birden fazla projeye (eski "hesap") bağlanabilir */
 const loginOf = project => project.login_id ? db.prepare("SELECT * FROM logins WHERE id=?").get(project.login_id) : null;
 const projectsForLogin = loginId => db.prepare("SELECT * FROM users WHERE login_id=? ORDER BY created").all(loginId);
+// bir kullanıcının en son içerik güncellediği proje — "en eski oluşturulan proje" yerine daha isabetli bir varsayılan aktif proje seçimi için
+function mostActiveProject(projects) {
+  let best = projects[0], bestTs = -1;
+  for (const p of projects) {
+    const row = db.prepare("SELECT MAX(updated) t FROM items WHERE user_id=? AND deleted=0").get(p.id);
+    const ts = row && row.t || 0;
+    if (ts > bestTs) { bestTs = ts; best = p; }
+  }
+  return best;
+}
 function resolveProject(loginId, ref) {
   const projects = projectsForLogin(loginId);
   if (!projects.length) throw new Error("bu hesaba bağlı proje yok");
-  if (!ref) return projects[0].id;
+  if (!ref) return mostActiveProject(projects).id;
   const p = projects.find(p => p.id === ref || p.name === ref);
   if (!p) throw new Error("proje bulunamadı: " + ref);
   return p.id;
@@ -877,7 +887,10 @@ http.createServer(async (req, res) => {
         const projects = projectsForLogin(login.id);
         if (!projects.length) { json(res, 401, { error: "Bu hesaba bağlı proje yok" }); return; }
         cookies = projects.map(pr => sessionCookie(pr.id, sign({ u: pr.id, v: login.session_version, exp: Date.now() + SESSION_MS })));
-        cookies.push(activeCookie(projects[0].id));
+        // bu tarayıcıda önceden aktif bırakılmış bir proje varsa onu koru; yoksa en son içerik güncellenen projeye düş
+        const prevActive = getCookie(req, "active");
+        const activeId = projects.some(pr => pr.id === prevActive) ? prevActive : mostActiveProject(projects).id;
+        cookies.push(activeCookie(activeId));
         identityId = login.id; identityEmail = login.email; projectIds = projects.map(p => p.id);
       } else {
         // eski (henüz login'e bağlanmamış) proje: doğrudan kendi parolasıyla giriş
