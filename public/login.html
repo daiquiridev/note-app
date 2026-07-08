@@ -75,7 +75,14 @@ button:disabled{opacity:.6;cursor:wait}
 
 <script>
 const params = new URLSearchParams(location.search);
-const returnTo = params.get("return");
+function safeReturn(v) {
+  if (!v) return "/";
+  try { v = decodeURIComponent(v); } catch { return "/"; }
+  // yalnızca tek başına "/" ile başlayan aynı-origin göreli yollara izin ver (açık yönlendirme/javascript: koruması)
+  if (!/^\/(?!\/)/.test(v)) return "/";
+  return v;
+}
+const returnTo = safeReturn(params.get("return"));
 
 const card = document.getElementById("card"), pw = document.getElementById("pw"),
       em = document.getElementById("em"), err = document.getElementById("err"), btn = document.getElementById("btn"),
@@ -92,7 +99,7 @@ card.addEventListener("submit", async e => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: em.value, password: pw.value })
     });
-    if (r.ok) { location.href = returnTo ? decodeURIComponent(returnTo) : "/"; return; }
+    if (r.ok) { location.href = returnTo; return; }
     const j = await r.json().catch(() => ({}));
     err.textContent = j.error || "Giriş başarısız";
     card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
