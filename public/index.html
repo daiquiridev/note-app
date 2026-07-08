@@ -669,11 +669,8 @@ input,textarea{font:inherit;color:inherit}
   <div class="account-box">
     <h3>Ayarlar</h3>
     <div class="sub cloud-only" id="acctCurrentEmail"></div>
+    <label class="cloud-only">Projeler</label>
     <div class="account-list cloud-only" id="acctList"></div>
-    <div class="account-add cloud-only" id="acctAddBtn">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      Başka hesap ekle
-    </div>
     <div class="divider cloud-only" id="acctDivider1"></div>
     <label>Görünüm</label>
     <div class="theme-seg" id="themeSeg">
@@ -700,7 +697,7 @@ input,textarea{font:inherit;color:inherit}
         <button class="btn-new" id="pwSaveBtn">Parolayı değiştir</button>
       </div>
     </div>
-    <span class="logout-all cloud-only" id="acctLogoutAll">Tüm hesaplardan çıkış yap</span>
+    <span class="logout-all cloud-only" id="acctLogoutAll">Çıkış yap</span>
   </div>
 </div>
 
@@ -715,7 +712,7 @@ input,textarea{font:inherit;color:inherit}
 <div class="toasts" id="toasts"></div>
 <div class="slash-menu" id="slashMenu"></div>
 
-<script>window.DEFTER_UID = "__UID__"; window.DEFTER_EMAIL = "__EMAIL__";</script>
+<script>window.DEFTER_UID = "__UID__"; window.DEFTER_EMAIL = "__EMAIL__"; window.DEFTER_PROJECT = "__PROJECT__";</script>
 <script>
 "use strict";
 /* ═══════════ yardımcılar ═══════════ */
@@ -2152,26 +2149,17 @@ async function loadAccountList() {
   const list = $("#acctList");
   list.innerHTML = accounts.map(a => `
     <div class="account-row" data-switch="${esc(a.id)}">
-      <span class="av">${esc(initials(a.email))}</span>
-      <span class="em">${esc(a.email)}</span>
+      <span class="av">${esc(initials(a.name))}</span>
+      <span class="em">${esc(a.name)}</span>
       ${a.id === active ? '<span class="tick">✓</span>' : ""}
-      <button class="out" data-signout="${esc(a.id)}" title="Bu hesaptan çıkış yap">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
-      </button>
     </div>`).join("");
 }
 async function switchAccount(id) {
   try {
     const r = await fetch("/api/switch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ uid: id }) });
     if (r.ok) { location.reload(); return; }
-    toast("Hesaba geçilemedi — tekrar giriş yapman gerekebilir");
+    toast("Projeye geçilemedi — tekrar giriş yapman gerekebilir");
   } catch { toast("Sunucuya ulaşılamadı"); }
-}
-async function signOutAccount(id) {
-  const wasActive = id === window.DEFTER_UID;
-  try { await fetch("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ uid: id }) }); }
-  catch { toast("Sunucuya ulaşılamadı"); return; }
-  if (wasActive) location.href = "/"; else loadAccountList();
 }
 function openAccountModal() {
   $("#pwCur").value = ""; $("#pwNew").value = ""; $("#pwNew2").value = ""; $("#pwMsg").textContent = ""; $("#pwMsg").className = "msg";
@@ -2182,12 +2170,9 @@ function closeAccountModal() { $("#accountOverlay").classList.remove("show"); }
 $("#btnAccount").onclick = openAccountModal;
 $("#accountOverlay").addEventListener("click", e => { if (e.target.id === "accountOverlay") closeAccountModal(); });
 $("#acctList").addEventListener("click", e => {
-  const out = e.target.closest("[data-signout]");
-  if (out) { signOutAccount(out.dataset.signout); return; }
   const row = e.target.closest("[data-switch]");
   if (row) switchAccount(row.dataset.switch);
 });
-$("#acctAddBtn").onclick = () => { location.href = "/login?add=1"; };
 $("#acctLogoutAll").onclick = async () => {
   try { await fetch("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }) }); }
   catch {}

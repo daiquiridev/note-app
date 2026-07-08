@@ -66,13 +66,62 @@ CREATE TABLE IF NOT EXISTS known_devices(
 );
 CREATE TABLE IF NOT EXISTS api_keys(
   key_hash TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
+  login_id TEXT NOT NULL,
   label TEXT,
   created INTEGER NOT NULL,
   last_used INTEGER
+);
+CREATE TABLE IF NOT EXISTS logins(
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  pass_hash TEXT NOT NULL,
+  created INTEGER NOT NULL,
+  session_version INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS oauth_clients(
+  client_id TEXT PRIMARY KEY,
+  redirect_uris TEXT NOT NULL,
+  client_name TEXT,
+  created INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_codes(
+  code_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  login_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  expires INTEGER NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS oauth_tokens(
+  token_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  login_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  expires INTEGER,
+  created INTEGER NOT NULL
 );`);
-/* eski kurulumlardan yükseltme: session_version kolonu yoksa ekle */
+/* eski kurulumlardan yükseltme: yeni kolonlar yoksa ekle */
 try { db.exec("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN login_id TEXT"); } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN name TEXT"); } catch {}
+try { db.exec("ALTER TABLE password_resets ADD COLUMN kind TEXT NOT NULL DEFAULT 'user'"); } catch {}
+/* eski api_keys şeması (user_id NOT NULL) varsa login_id'ye taşı — tablo şu ana kadar üretimde fiilen kullanılmadı */
+{
+  const cols = db.prepare("PRAGMA table_info(api_keys)").all();
+  const hasLoginId = cols.some(c => c.name === "login_id");
+  const userIdCol = cols.find(c => c.name === "user_id");
+  if (!hasLoginId || (userIdCol && userIdCol.notnull)) {
+    db.exec("DROP TABLE IF EXISTS api_keys");
+    db.exec(`CREATE TABLE api_keys(
+      key_hash TEXT PRIMARY KEY,
+      login_id TEXT NOT NULL,
+      label TEXT,
+      created INTEGER NOT NULL,
+      last_used INTEGER
+    )`);
+  }
+}
 
 /* ── parola ── */
 const hashPass = (pw, salt) => crypto.scryptSync(String(pw), salt, 32).toString("hex");
@@ -203,16 +252,17 @@ function getItemJson(uid, kind, id) {
   return row ? JSON.parse(row.json) : null;
 }
 
-/* ── MCP: API key ile kimlik doğrulama ── */
+/* ── MCP: statik API key ya da OAuth access token ile kimlik doğrulama → login_id döner ── */
 function authMcp(req) {
   const auth = req.headers["authorization"] || "";
   const m = /^Bearer\s+(\S+)$/i.exec(auth);
   if (!m) return null;
   const hash = crypto.createHash("sha256").update(m[1]).digest("hex");
-  const row = db.prepare("SELECT * FROM api_keys WHERE key_hash=?").get(hash);
-  if (!row) return null;
-  db.prepare("UPDATE api_keys SET last_used=? WHERE key_hash=?").run(Date.now(), hash);
-  return db.prepare("SELECT * FROM users WHERE id=?").get(row.user_id) || null;
+  const key = db.prepare("SELECT login_id FROM api_keys WHERE key_hash=?").get(hash);
+  if (key && key.login_id) { db.prepare("UPDATE api_keys SET last_used=? WHERE key_hash=?").run(Date.now(), hash); return key.login_id; }
+  const tok = db.prepare("SELECT login_id, expires FROM oauth_tokens WHERE token_hash=? AND kind='access'").get(hash);
+  if (tok && (!tok.expires || tok.expires > Date.now())) return tok.login_id;
+  return null;
 }
 
 /* ── MCP: blok metni <-> düz metin ── */
@@ -241,22 +291,26 @@ function noteSummary(n) {
 }
 
 /* ── MCP: araç tanımları ve çalıştırıcılar ── */
+const PROJECT_PROP = { type: "string", description: "Proje id'si veya adı (verilmezse varsayılan/ilk proje kullanılır). Kullanılabilir projeler için list_projects çağır." };
 const MCP_TOOLS = [
-  { name: "list_notes", description: "Kullanıcının tüm notlarını (başlık, önizleme, klasör) listeler.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "get_note", description: "Bir notun tam içeriğini (düz metin olarak) getirir.", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false } },
-  { name: "create_note", description: "Yeni bir not oluşturur.", inputSchema: { type: "object", properties: { title: { type: "string" }, content: { type: "string", description: "Düz metin; '- ' ile başlayan satırlar madde, '[ ] '/'[x] ' ile başlayanlar yapılacak olarak işlenir" }, folderId: { type: "string" } }, required: ["title"], additionalProperties: false } },
-  { name: "update_note", description: "Mevcut bir notu günceller (verilmeyen alanlar değişmez).", inputSchema: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, content: { type: "string" }, folderId: { type: "string" }, pinned: { type: "boolean" } }, required: ["id"], additionalProperties: false } },
-  { name: "delete_note", description: "Bir notu siler.", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false } },
-  { name: "list_tasks", description: "Kullanıcının tüm görevlerini listeler.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "create_task", description: "Yeni bir görev oluşturur.", inputSchema: { type: "object", properties: { text: { type: "string" }, desc: { type: "string" }, due: { type: "number", description: "unix ms, opsiyonel" } }, required: ["text"], additionalProperties: false } },
-  { name: "update_task", description: "Mevcut bir görevi günceller (verilmeyen alanlar değişmez).", inputSchema: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, desc: { type: "string" }, done: { type: "boolean" }, due: { type: "number" } }, required: ["id"], additionalProperties: false } },
-  { name: "delete_task", description: "Bir görevi siler.", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false } },
-  { name: "list_folders", description: "Kullanıcının tüm klasörlerini listeler.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "create_folder", description: "Yeni bir klasör oluşturur.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"], additionalProperties: false } },
+  { name: "list_projects", description: "Bu hesaba bağlı projeleri (ayrı not/görev alanları) listeler.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "list_notes", description: "Bir projedeki tüm notları (başlık, önizleme, klasör) listeler.", inputSchema: { type: "object", properties: { project: PROJECT_PROP }, additionalProperties: false } },
+  { name: "get_note", description: "Bir notun tam içeriğini (düz metin olarak) getirir.", inputSchema: { type: "object", properties: { id: { type: "string" }, project: PROJECT_PROP }, required: ["id"], additionalProperties: false } },
+  { name: "create_note", description: "Yeni bir not oluşturur.", inputSchema: { type: "object", properties: { title: { type: "string" }, content: { type: "string", description: "Düz metin; '- ' ile başlayan satırlar madde, '[ ] '/'[x] ' ile başlayanlar yapılacak olarak işlenir" }, folderId: { type: "string" }, project: PROJECT_PROP }, required: ["title"], additionalProperties: false } },
+  { name: "update_note", description: "Mevcut bir notu günceller (verilmeyen alanlar değişmez).", inputSchema: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, content: { type: "string" }, folderId: { type: "string" }, pinned: { type: "boolean" }, project: PROJECT_PROP }, required: ["id"], additionalProperties: false } },
+  { name: "delete_note", description: "Bir notu siler.", inputSchema: { type: "object", properties: { id: { type: "string" }, project: PROJECT_PROP }, required: ["id"], additionalProperties: false } },
+  { name: "list_tasks", description: "Bir projedeki tüm görevleri listeler.", inputSchema: { type: "object", properties: { project: PROJECT_PROP }, additionalProperties: false } },
+  { name: "create_task", description: "Yeni bir görev oluşturur.", inputSchema: { type: "object", properties: { text: { type: "string" }, desc: { type: "string" }, due: { type: "number", description: "unix ms, opsiyonel" }, project: PROJECT_PROP }, required: ["text"], additionalProperties: false } },
+  { name: "update_task", description: "Mevcut bir görevi günceller (verilmeyen alanlar değişmez).", inputSchema: { type: "object", properties: { id: { type: "string" }, text: { type: "string" }, desc: { type: "string" }, done: { type: "boolean" }, due: { type: "number" }, project: PROJECT_PROP }, required: ["id"], additionalProperties: false } },
+  { name: "delete_task", description: "Bir görevi siler.", inputSchema: { type: "object", properties: { id: { type: "string" }, project: PROJECT_PROP }, required: ["id"], additionalProperties: false } },
+  { name: "list_folders", description: "Bir projedeki tüm klasörleri listeler.", inputSchema: { type: "object", properties: { project: PROJECT_PROP }, additionalProperties: false } },
+  { name: "create_folder", description: "Yeni bir klasör oluşturur.", inputSchema: { type: "object", properties: { name: { type: "string" }, project: PROJECT_PROP }, required: ["name"], additionalProperties: false } },
 ];
-function mcpCall(uid, name, args) {
+function mcpCall(loginId, name, args) {
   args = args || {};
   const now = Date.now();
+  if (name === "list_projects") return projectsForLogin(loginId).map(p => ({ id: p.id, name: p.name || p.id }));
+  const uid = resolveProject(loginId, args.project);
   switch (name) {
     case "list_notes": return listItems(uid, "note").map(noteSummary);
     case "get_note": {
@@ -341,13 +395,20 @@ async function handleMcp(req, res) {
   if (isNotification) { res.writeHead(202); res.end(); return; }
   if (method === "ping") { reply({}); return; }
 
-  const user = authMcp(req);
-  if (!user) { replyErr(-32001, "Yetkisiz — geçerli bir API key ile Authorization: Bearer <key> gönder"); return; }
+  const loginId = authMcp(req);
+  if (!loginId) {
+    res.writeHead(401, {
+      "Content-Type": "application/json",
+      "WWW-Authenticate": `Bearer resource_metadata="${APP_URL}/.well-known/oauth-protected-resource"`
+    });
+    res.end(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32001, message: "Yetkisiz — geçerli bir Bearer token gönder" } }));
+    return;
+  }
 
   if (method === "tools/list") { reply({ tools: MCP_TOOLS }); return; }
   if (method === "tools/call") {
     try {
-      const out = mcpCall(user.id, params && params.name, params && params.arguments);
+      const out = mcpCall(loginId, params && params.name, params && params.arguments);
       reply({ content: [{ type: "text", text: JSON.stringify(out) }] });
     } catch (e) {
       reply({ content: [{ type: "text", text: e.message }], isError: true });
@@ -355,6 +416,71 @@ async function handleMcp(req, res) {
     return;
   }
   replyErr(-32601, "Bilinmeyen method: " + method);
+}
+
+/* ── OAuth 2.1 + PKCE + Dinamik İstemci Kaydı (claude.ai custom connector için) ── */
+function issueToken(clientId, loginId, kind, ttlMs) {
+  const tok = "dfo_" + crypto.randomBytes(32).toString("base64url");
+  const hash = crypto.createHash("sha256").update(tok).digest("hex");
+  db.prepare("INSERT INTO oauth_tokens(token_hash,client_id,login_id,kind,expires,created) VALUES(?,?,?,?,?,?)")
+    .run(hash, clientId, loginId, kind, ttlMs ? Date.now() + ttlMs : null, Date.now());
+  return tok;
+}
+function parseForm(s) { return Object.fromEntries(new URLSearchParams(s)); }
+function authRedirectError(res, redirectUri, state, error, desc) {
+  const u = new URL(redirectUri);
+  u.searchParams.set("error", error);
+  if (desc) u.searchParams.set("error_description", desc);
+  if (state) u.searchParams.set("state", state);
+  res.writeHead(302, { Location: u.toString() }); res.end();
+}
+function renderConsentPage(clientName, email, q) {
+  return `<!DOCTYPE html><html lang="tr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>defter. — erişim izni</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,"Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;min-height:100vh;display:grid;place-items:center;
+  background:linear-gradient(130deg,#faf6ec 0%,#f9f2e9 32%,#eff5f0 66%,#f8f4e9 100%);color:#3a413c;-webkit-font-smoothing:antialiased}
+.card{width:340px;max-width:90vw;text-align:center;padding:34px 28px;border-radius:22px;background:rgba(255,253,247,.8);
+  backdrop-filter:blur(24px) saturate(135%);border:1px solid rgba(255,255,255,.72);box-shadow:0 24px 60px rgba(110,120,105,.14),0 4px 16px rgba(110,120,105,.08)}
+.logo{width:52px;height:52px;border-radius:16px;background:linear-gradient(135deg,#71b8a5,#4f9d8b);margin:0 auto 14px;
+  display:grid;place-items:center;box-shadow:0 8px 20px rgba(95,150,130,.3)}
+.logo svg{width:26px;height:26px;stroke:#fff}
+h1{font-size:19px;letter-spacing:-.3px;margin-bottom:4px}
+h1 i{color:#4f9d8b;font-style:normal}
+p{font-size:13px;color:#5f6a62;margin-bottom:6px;line-height:1.5}
+.who{font-size:12.5px;color:#98a099;margin-bottom:20px}
+button{width:100%;margin-top:10px;padding:11px;border:none;border-radius:12px;cursor:pointer;font:inherit;font-weight:600;font-size:14.5px}
+.approve{background:#39403b;color:#f7f5ec}
+.approve:hover{filter:brightness(1.1)}
+.deny{background:transparent;color:#98a099;margin-top:6px}
+.deny:hover{color:#cf6a5e}
+@media (prefers-color-scheme: dark){
+  body{background:linear-gradient(130deg,#242923 0%,#2a2e26 34%,#20302a 68%,#282c22 100%);color:#e9ebe4}
+  .card{background:rgba(46,52,46,.75);border-color:rgba(255,255,255,.12);box-shadow:0 24px 60px rgba(0,0,0,.4)}
+  p{color:#b6beb2} .who{color:#8b948a}
+  .approve{background:#e4e6de;color:#2b302b}
+}
+</style></head><body>
+<div class="card">
+  <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></div>
+  <h1>defter<i>.</i></h1>
+  <p><b>${escHtml(clientName)}</b> notlarına ve görevlerine erişim istiyor.</p>
+  <div class="who">${escHtml(email)} olarak giriş yaptın</div>
+  <button class="approve" id="approve">İzin ver</button>
+  <button class="deny" id="deny">İptal</button>
+</div>
+<script>
+const q = ${JSON.stringify(q).replace(/</g, "\\u003c")};
+async function decide(approve) {
+  const r = await fetch("/authorize/decision", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...q, approve }) });
+  const j = await r.json().catch(() => ({}));
+  if (j.redirect) location.href = j.redirect; else document.body.innerHTML = "<p style='padding:40px;text-align:center'>Bir hata oluştu.</p>";
+}
+document.getElementById("approve").onclick = () => decide(true);
+document.getElementById("deny").onclick = () => decide(false);
+</script>
+</body></html>`;
 }
 
 migrate();
@@ -375,24 +501,57 @@ if (process.argv[2] === "user-add" || process.argv[2] === "user-pass") {
   process.exit(0);
 }
 
-/* ── komut satırı yönetimi: MCP API key'leri ── */
+/* ── komut satırı yönetimi: tek-login/çoklu-proje kurulumu ── */
+if (process.argv[2] === "login-add") {
+  const [, , , email, pass] = process.argv;
+  if (!email || !pass) { console.error("kullanım: node server.js login-add <email> <parola>"); process.exit(1); }
+  const id = crypto.randomUUID().slice(0, 8);
+  db.prepare("INSERT INTO logins(id,email,pass_hash,created) VALUES(?,?,?,?)").run(id, email.toLowerCase(), makeHash(pass), Date.now());
+  console.log("login oluşturuldu: " + email + " (id=" + id + ")");
+  process.exit(0);
+}
+if (process.argv[2] === "login-adopt") {
+  // mevcut bir projenin parolasını yeni bir login'e taşır (düz metin parolaya gerek kalmadan) ve o projeyi bu login'e bağlar
+  const [, , , email, projectId] = process.argv;
+  if (!email || !projectId) { console.error("kullanım: node server.js login-adopt <email> <proje_id>"); process.exit(1); }
+  const proj = db.prepare("SELECT * FROM users WHERE id=?").get(projectId);
+  if (!proj) { console.error("proje bulunamadı: " + projectId); process.exit(1); }
+  const id = crypto.randomUUID().slice(0, 8);
+  db.prepare("INSERT INTO logins(id,email,pass_hash,created) VALUES(?,?,?,?)").run(id, email.toLowerCase(), proj.pass_hash, Date.now());
+  db.prepare("UPDATE users SET login_id=?, name=COALESCE(name, id) WHERE id=?").run(id, projectId);
+  console.log("login oluşturuldu (" + email + ") ve proje bağlandı: " + projectId);
+  process.exit(0);
+}
+if (process.argv[2] === "project-link") {
+  const [, , , projectId, email, name] = process.argv;
+  if (!projectId || !email) { console.error("kullanım: node server.js project-link <proje_id> <login_email> [proje_adı]"); process.exit(1); }
+  const login = db.prepare("SELECT * FROM logins WHERE email=?").get(email.toLowerCase());
+  if (!login) { console.error("login bulunamadı: " + email); process.exit(1); }
+  const proj = db.prepare("SELECT * FROM users WHERE id=?").get(projectId);
+  if (!proj) { console.error("proje bulunamadı: " + projectId); process.exit(1); }
+  db.prepare("UPDATE users SET login_id=?, name=? WHERE id=?").run(login.id, name || projectId, projectId);
+  console.log("proje bağlandı: " + projectId + " → " + email);
+  process.exit(0);
+}
+
+/* ── komut satırı yönetimi: MCP API key'leri (login'e bağlıdır, tüm projelere erişir) ── */
 if (process.argv[2] === "mcp-key-add") {
   const [, , , email, label] = process.argv;
-  if (!email) { console.error("kullanım: node server.js mcp-key-add <email> [etiket]"); process.exit(1); }
-  const user = db.prepare("SELECT * FROM users WHERE email=?").get(email.toLowerCase());
-  if (!user) { console.error("kullanıcı bulunamadı: " + email); process.exit(1); }
+  if (!email) { console.error("kullanım: node server.js mcp-key-add <login_email> [etiket]"); process.exit(1); }
+  const login = db.prepare("SELECT * FROM logins WHERE email=?").get(email.toLowerCase());
+  if (!login) { console.error("login bulunamadı: " + email); process.exit(1); }
   const key = "dft_" + crypto.randomBytes(24).toString("base64url");
   const hash = crypto.createHash("sha256").update(key).digest("hex");
-  db.prepare("INSERT INTO api_keys(key_hash,user_id,label,created) VALUES(?,?,?,?)").run(hash, user.id, label || null, Date.now());
+  db.prepare("INSERT INTO api_keys(key_hash,login_id,label,created) VALUES(?,?,?,?)").run(hash, login.id, label || null, Date.now());
   console.log("API key oluşturuldu (bir daha gösterilmeyecek, güvenli bir yere kaydet):\n" + key);
   process.exit(0);
 }
 if (process.argv[2] === "mcp-key-list") {
   const [, , , email] = process.argv;
-  if (!email) { console.error("kullanım: node server.js mcp-key-list <email>"); process.exit(1); }
-  const user = db.prepare("SELECT * FROM users WHERE email=?").get(email.toLowerCase());
-  if (!user) { console.error("kullanıcı bulunamadı: " + email); process.exit(1); }
-  const rows = db.prepare("SELECT key_hash,label,created,last_used FROM api_keys WHERE user_id=?").all(user.id);
+  if (!email) { console.error("kullanım: node server.js mcp-key-list <login_email>"); process.exit(1); }
+  const login = db.prepare("SELECT * FROM logins WHERE email=?").get(email.toLowerCase());
+  if (!login) { console.error("login bulunamadı: " + email); process.exit(1); }
+  const rows = db.prepare("SELECT key_hash,label,created,last_used FROM api_keys WHERE login_id=?").all(login.id);
   if (!rows.length) console.log("kayıtlı API key yok");
   for (const r of rows) console.log(`${r.key_hash.slice(0, 12)}…  etiket=${r.label || "-"}  oluşturuldu=${new Date(r.created).toISOString()}  son kullanım=${r.last_used ? new Date(r.last_used).toISOString() : "-"}`);
   process.exit(0);
@@ -410,7 +569,10 @@ if (process.argv[2] === "mcp-key-revoke") {
 const INDEX_TPL = fs.readFileSync(path.join(__dirname, "public", "index.html"), "utf8");
 const LOGIN = fs.readFileSync(path.join(__dirname, "public", "login.html"));
 const RESET_PAGE = fs.readFileSync(path.join(__dirname, "public", "reset.html"));
-const renderIndex = user => INDEX_TPL.replace('"__UID__"', JSON.stringify(user.id)).replace('"__EMAIL__"', JSON.stringify(user.email));
+const renderIndex = project => INDEX_TPL
+  .replace('"__UID__"', JSON.stringify(project.id))
+  .replace('"__EMAIL__"', JSON.stringify((loginOf(project) || project).email))
+  .replace('"__PROJECT__"', JSON.stringify(project.name || project.id));
 
 /* ── e-posta (Resend REST API, npm bağımlılığı yok) ── */
 const escHtml = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -483,15 +645,32 @@ function getCookiesByPrefix(req, prefix) {
   }
   return out;
 }
-/* çoklu hesap oturumu: her hesap kendi sid_<uid> cookie'sinde, "active" hangisinin aktif olduğunu tutar */
+/* ── giriş kimliği (login) ↔ proje ── tek login birden fazla projeye (eski "hesap") bağlanabilir */
+const loginOf = project => project.login_id ? db.prepare("SELECT * FROM logins WHERE id=?").get(project.login_id) : null;
+const projectsForLogin = loginId => db.prepare("SELECT * FROM users WHERE login_id=? ORDER BY created").all(loginId);
+function resolveProject(loginId, ref) {
+  const projects = projectsForLogin(loginId);
+  if (!projects.length) throw new Error("bu hesaba bağlı proje yok");
+  if (!ref) return projects[0].id;
+  const p = projects.find(p => p.id === ref || p.name === ref);
+  if (!p) throw new Error("proje bulunamadı: " + ref);
+  return p.id;
+}
+
+/* çoklu proje oturumu: her proje kendi sid_<uid> cookie'sinde, "active" hangisinin aktif olduğunu tutar.
+   Bir projenin oturum geçerliliği, bağlı olduğu login'in session_version'ına göre doğrulanır (varsa);
+   login_id henüz atanmamış eski projelerde kendi session_version'ı kullanılır. */
 function sessionFor(req, uid) {
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(uid)) return null;
   const tok = getCookie(req, "sid_" + uid);
   const p = verifyTok(tok);
   if (!p || p.u !== uid) return null;
-  const user = db.prepare("SELECT * FROM users WHERE id=?").get(uid);
-  if (!user || user.session_version !== p.v) return null;
-  return user;
+  const project = db.prepare("SELECT * FROM users WHERE id=?").get(uid);
+  if (!project) return null;
+  const login = loginOf(project);
+  const version = login ? login.session_version : project.session_version;
+  if (version !== p.v) return null;
+  return project;
 }
 function activeUid(req) { return getCookie(req, "active"); }
 function authedUser(req) {
@@ -502,7 +681,7 @@ function listSessions(req) {
   const out = [];
   for (const uid of getCookiesByPrefix(req, "sid_")) {
     const u = sessionFor(req, uid);
-    if (u) out.push({ id: u.id, email: u.email });
+    if (u) out.push({ id: u.id, name: u.name || u.id, email: (loginOf(u) || u).email });
   }
   return out;
 }
@@ -557,30 +736,160 @@ http.createServer(async (req, res) => {
 
     if (p === "/mcp") { await handleMcp(req, res); return; }
 
+    if (p === "/.well-known/oauth-protected-resource") {
+      json(res, 200, { resource: APP_URL + "/mcp", authorization_servers: [APP_URL] });
+      return;
+    }
+    if (p === "/.well-known/oauth-authorization-server") {
+      json(res, 200, {
+        issuer: APP_URL,
+        authorization_endpoint: APP_URL + "/authorize",
+        token_endpoint: APP_URL + "/token",
+        registration_endpoint: APP_URL + "/register",
+        response_types_supported: ["code"],
+        grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        token_endpoint_auth_methods_supported: ["none"],
+      });
+      return;
+    }
+
+    if (p === "/register" && req.method === "POST") {
+      if (limited(ip)) { json(res, 429, { error: "slow_down" }); return; }
+      let body = {};
+      try { body = JSON.parse(await readBody(req)); } catch { json(res, 400, { error: "invalid_client_metadata" }); return; }
+      const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris.filter(u => typeof u === "string" && /^https?:\/\//.test(u)) : [];
+      if (!uris.length) { json(res, 400, { error: "invalid_redirect_uri" }); return; }
+      const clientId = crypto.randomUUID();
+      const clientName = String(body.client_name || "MCP Client").slice(0, 120);
+      db.prepare("INSERT INTO oauth_clients(client_id,redirect_uris,client_name,created) VALUES(?,?,?,?)")
+        .run(clientId, JSON.stringify(uris), clientName, Date.now());
+      json(res, 201, {
+        client_id: clientId, client_id_issued_at: Math.floor(Date.now() / 1000),
+        redirect_uris: uris, client_name: clientName, token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"], response_types: ["code"],
+      });
+      return;
+    }
+
+    if (p === "/authorize") {
+      const q = url.searchParams;
+      const clientId = q.get("client_id"), redirectUri = q.get("redirect_uri");
+      const responseType = q.get("response_type"), state = q.get("state") || "";
+      const codeChallenge = q.get("code_challenge"), codeChallengeMethod = q.get("code_challenge_method") || "";
+      const client = clientId && db.prepare("SELECT * FROM oauth_clients WHERE client_id=?").get(clientId);
+      if (!client) { html(res, 400, "<p>Geçersiz client_id</p>"); return; }
+      const redirectUris = JSON.parse(client.redirect_uris);
+      if (!redirectUri || !redirectUris.includes(redirectUri)) { html(res, 400, "<p>Geçersiz redirect_uri</p>"); return; }
+      if (responseType !== "code") { authRedirectError(res, redirectUri, state, "unsupported_response_type"); return; }
+      if (!codeChallenge || codeChallengeMethod !== "S256") { authRedirectError(res, redirectUri, state, "invalid_request", "PKCE (S256) zorunlu"); return; }
+
+      const project = authedUser(req);
+      if (!project) { res.writeHead(302, { Location: "/login?return=" + encodeURIComponent(req.url) }); res.end(); return; }
+      const identity = loginOf(project) || project;
+
+      if (req.method === "GET") {
+        html(res, 200, renderConsentPage(client.client_name || client.client_id, identity.email, {
+          client_id: clientId, redirect_uri: redirectUri, state, code_challenge: codeChallenge, code_challenge_method: codeChallengeMethod,
+        }));
+        return;
+      }
+    }
+
+    if (p === "/authorize/decision" && req.method === "POST") {
+      let body = {};
+      try { body = JSON.parse(await readBody(req)); } catch { json(res, 400, { error: "invalid_request" }); return; }
+      const { client_id: clientId, redirect_uri: redirectUri, state = "", code_challenge: codeChallenge, code_challenge_method: codeChallengeMethod, approve } = body;
+      const client = clientId && db.prepare("SELECT * FROM oauth_clients WHERE client_id=?").get(clientId);
+      if (!client) { json(res, 400, { error: "invalid_client" }); return; }
+      const redirectUris = JSON.parse(client.redirect_uris);
+      if (!redirectUri || !redirectUris.includes(redirectUri)) { json(res, 400, { error: "invalid_redirect_uri" }); return; }
+      if (!codeChallenge || codeChallengeMethod !== "S256") { json(res, 400, { error: "invalid_request" }); return; }
+      const project = authedUser(req);
+      if (!project) { json(res, 401, { error: "login_required" }); return; }
+      if (!approve) {
+        const u = new URL(redirectUri); u.searchParams.set("error", "access_denied"); if (state) u.searchParams.set("state", state);
+        json(res, 200, { redirect: u.toString() }); return;
+      }
+      const identity = loginOf(project) || project;
+      const loginId = identity.id;
+      const code = crypto.randomBytes(32).toString("base64url");
+      const codeHash = crypto.createHash("sha256").update(code).digest("hex");
+      db.prepare("INSERT INTO oauth_codes(code_hash,client_id,login_id,redirect_uri,code_challenge,expires,used) VALUES(?,?,?,?,?,?,0)")
+        .run(codeHash, clientId, loginId, redirectUri, codeChallenge, Date.now() + 5 * 60 * 1000);
+      const u = new URL(redirectUri); u.searchParams.set("code", code); if (state) u.searchParams.set("state", state);
+      json(res, 200, { redirect: u.toString() });
+      return;
+    }
+
+    if (p === "/token" && req.method === "POST") {
+      if (limited(ip)) { json(res, 429, { error: "slow_down" }); return; }
+      const raw = await readBody(req);
+      const ct = req.headers["content-type"] || "";
+      let body;
+      try { body = ct.includes("application/json") ? JSON.parse(raw || "{}") : parseForm(raw); } catch { json(res, 400, { error: "invalid_request" }); return; }
+
+      if (body.grant_type === "authorization_code") {
+        const codeHash = crypto.createHash("sha256").update(String(body.code || "")).digest("hex");
+        const row = db.prepare("SELECT * FROM oauth_codes WHERE code_hash=?").get(codeHash);
+        if (!row || row.used || row.expires < Date.now() || row.client_id !== body.client_id || row.redirect_uri !== body.redirect_uri) {
+          json(res, 400, { error: "invalid_grant" }); return;
+        }
+        const verifier = String(body.code_verifier || "");
+        const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+        if (challenge !== row.code_challenge) { json(res, 400, { error: "invalid_grant", error_description: "PKCE doğrulaması başarısız" }); return; }
+        db.prepare("UPDATE oauth_codes SET used=1 WHERE code_hash=?").run(codeHash);
+        const access = issueToken(row.client_id, row.login_id, "access", 3600_000);
+        const refresh = issueToken(row.client_id, row.login_id, "refresh", null);
+        json(res, 200, { access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh, scope: "" });
+        return;
+      }
+      if (body.grant_type === "refresh_token") {
+        const rHash = crypto.createHash("sha256").update(String(body.refresh_token || "")).digest("hex");
+        const row = db.prepare("SELECT * FROM oauth_tokens WHERE token_hash=? AND kind='refresh'").get(rHash);
+        if (!row || (row.expires && row.expires < Date.now())) { json(res, 400, { error: "invalid_grant" }); return; }
+        const access = issueToken(row.client_id, row.login_id, "access", 3600_000);
+        json(res, 200, { access_token: access, token_type: "Bearer", expires_in: 3600, scope: "" });
+        return;
+      }
+      json(res, 400, { error: "unsupported_grant_type" });
+      return;
+    }
+
     if (p === "/api/login" && req.method === "POST") {
       if (limited(ip)) { json(res, 429, { error: "Çok fazla deneme — 1 dakika bekle" }); return; }
       let body = {};
       try { body = JSON.parse(await readBody(req)); } catch {}
       const email = String(body.email || "").trim().toLowerCase();
-      const user = db.prepare("SELECT * FROM users WHERE email=?").get(email);
-      if (!user || !verifyHash(user.pass_hash, body.password || "")) {
-        json(res, 401, { error: "E-posta ya da parola yanlış" });
-        return;
+      const pass = body.password || "";
+
+      let identityId, identityEmail, cookies, projectIds;
+      const login = db.prepare("SELECT * FROM logins WHERE email=?").get(email);
+      if (login && verifyHash(login.pass_hash, pass)) {
+        const projects = projectsForLogin(login.id);
+        if (!projects.length) { json(res, 401, { error: "Bu hesaba bağlı proje yok" }); return; }
+        cookies = projects.map(pr => sessionCookie(pr.id, sign({ u: pr.id, v: login.session_version, exp: Date.now() + SESSION_MS })));
+        cookies.push(activeCookie(projects[0].id));
+        identityId = login.id; identityEmail = login.email; projectIds = projects.map(p => p.id);
+      } else {
+        // eski (henüz login'e bağlanmamış) proje: doğrudan kendi parolasıyla giriş
+        const user = db.prepare("SELECT * FROM users WHERE email=? AND login_id IS NULL").get(email);
+        if (!user || !verifyHash(user.pass_hash, pass)) { json(res, 401, { error: "E-posta ya da parola yanlış" }); return; }
+        cookies = [sessionCookie(user.id, sign({ u: user.id, v: user.session_version, exp: Date.now() + SESSION_MS })), activeCookie(user.id)];
+        identityId = user.id; identityEmail = user.email; projectIds = [user.id];
       }
-      const tok = sign({ u: user.id, v: user.session_version, exp: Date.now() + SESSION_MS });
-      const cookies = [sessionCookie(user.id, tok), activeCookie(user.id)];
 
       let deviceId = getCookie(req, "did");
       if (!deviceId || !/^[a-f0-9]{32}$/.test(deviceId)) { deviceId = crypto.randomBytes(16).toString("hex"); cookies.push(deviceCookie(deviceId)); }
-      const known = db.prepare("SELECT 1 FROM known_devices WHERE user_id=? AND device_id=?").get(user.id, deviceId);
+      const known = db.prepare("SELECT 1 FROM known_devices WHERE user_id=? AND device_id=?").get(identityId, deviceId);
       if (!known) {
-        db.prepare("INSERT INTO known_devices(user_id,device_id,created,last_seen) VALUES(?,?,?,?)").run(user.id, deviceId, Date.now(), Date.now());
-        sendMail(user.email, "defter. — yeni cihazdan giriş", newDeviceHtml(ip, req.headers["user-agent"])).catch(() => {});
+        db.prepare("INSERT INTO known_devices(user_id,device_id,created,last_seen) VALUES(?,?,?,?)").run(identityId, deviceId, Date.now(), Date.now());
+        sendMail(identityEmail, "defter. — yeni cihazdan giriş", newDeviceHtml(ip, req.headers["user-agent"])).catch(() => {});
       } else {
-        db.prepare("UPDATE known_devices SET last_seen=? WHERE user_id=? AND device_id=?").run(Date.now(), user.id, deviceId);
+        db.prepare("UPDATE known_devices SET last_seen=? WHERE user_id=? AND device_id=?").run(Date.now(), identityId, deviceId);
       }
 
-      json(res, 200, { ok: true, email: user.email }, { "Set-Cookie": cookies });
+      json(res, 200, { ok: true, email: identityEmail, projects: projectIds }, { "Set-Cookie": cookies });
       return;
     }
 
@@ -616,7 +925,7 @@ http.createServer(async (req, res) => {
       const uid = String(body.uid || "");
       const user = sessionFor(req, uid);
       if (!user) { json(res, 401, { error: "Bu hesapla oturum bulunamadı" }); return; }
-      json(res, 200, { ok: true, email: user.email }, { "Set-Cookie": [activeCookie(uid)] });
+      json(res, 200, { ok: true, email: (loginOf(user) || user).email }, { "Set-Cookie": [activeCookie(uid)] });
       return;
     }
 
@@ -630,12 +939,14 @@ http.createServer(async (req, res) => {
       let body = {};
       try { body = JSON.parse(await readBody(req)); } catch {}
       const email = String(body.email || "").trim().toLowerCase();
-      const user = db.prepare("SELECT * FROM users WHERE email=?").get(email);
-      if (user) {
+      const login = db.prepare("SELECT * FROM logins WHERE email=?").get(email);
+      const user = !login && db.prepare("SELECT * FROM users WHERE email=? AND login_id IS NULL").get(email);
+      const identity = login || user;
+      if (identity) {
         const token = crypto.randomBytes(32).toString("base64url");
         const hash = crypto.createHash("sha256").update(token).digest("hex");
-        db.prepare("INSERT INTO password_resets(token_hash,user_id,expires,used) VALUES(?,?,?,0)").run(hash, user.id, Date.now() + RESET_MS);
-        sendMail(user.email, "defter. — parola sıfırlama", forgotHtml(APP_URL + "/reset?token=" + token)).catch(() => {});
+        db.prepare("INSERT INTO password_resets(token_hash,user_id,expires,used,kind) VALUES(?,?,?,0,?)").run(hash, identity.id, Date.now() + RESET_MS, login ? "login" : "user");
+        sendMail(identity.email, "defter. — parola sıfırlama", forgotHtml(APP_URL + "/reset?token=" + token)).catch(() => {});
       }
       json(res, 200, { ok: true, message: "Eğer bu e-posta kayıtlıysa sıfırlama bağlantısı gönderildi." });
       return;
@@ -652,11 +963,14 @@ http.createServer(async (req, res) => {
       const hash = crypto.createHash("sha256").update(token).digest("hex");
       const row = db.prepare("SELECT * FROM password_resets WHERE token_hash=?").get(hash);
       if (!row || row.used || row.expires < Date.now()) { json(res, 400, { error: "Bağlantı geçersiz veya süresi dolmuş" }); return; }
-      const user = db.prepare("SELECT * FROM users WHERE id=?").get(row.user_id);
-      if (!user) { json(res, 400, { error: "Bağlantı geçersiz veya süresi dolmuş" }); return; }
-      db.prepare("UPDATE users SET pass_hash=?, session_version=session_version+1 WHERE id=?").run(makeHash(pass), user.id);
+      const identity = row.kind === "login"
+        ? db.prepare("SELECT * FROM logins WHERE id=?").get(row.user_id)
+        : db.prepare("SELECT * FROM users WHERE id=?").get(row.user_id);
+      if (!identity) { json(res, 400, { error: "Bağlantı geçersiz veya süresi dolmuş" }); return; }
+      if (row.kind === "login") db.prepare("UPDATE logins SET pass_hash=?, session_version=session_version+1 WHERE id=?").run(makeHash(pass), identity.id);
+      else db.prepare("UPDATE users SET pass_hash=?, session_version=session_version+1 WHERE id=?").run(makeHash(pass), identity.id);
       db.prepare("UPDATE password_resets SET used=1 WHERE token_hash=?").run(hash);
-      sendMail(user.email, "defter. — parolan değişti", passwordChangedHtml()).catch(() => {});
+      sendMail(identity.email, "defter. — parolan değişti", passwordChangedHtml()).catch(() => {});
       json(res, 200, { ok: true });
       return;
     }
@@ -671,18 +985,29 @@ http.createServer(async (req, res) => {
       const user = authedUser(req);
       if (!user) { json(res, 401, { error: "Oturum yok" }); return; }
 
-      if (p === "/api/me" && req.method === "GET") { json(res, 200, { id: user.id, email: user.email }); return; }
+      if (p === "/api/me" && req.method === "GET") {
+        json(res, 200, { id: user.id, name: user.name || user.id, email: (loginOf(user) || user).email });
+        return;
+      }
 
       if (p === "/api/password" && req.method === "POST") {
         let body = {};
         try { body = JSON.parse(await readBody(req)); } catch {}
-        if (!verifyHash(user.pass_hash, body.current || "")) { json(res, 403, { error: "Mevcut parola yanlış" }); return; }
+        const login = loginOf(user);
+        const identity = login || user;
+        if (!verifyHash(identity.pass_hash, body.current || "")) { json(res, 403, { error: "Mevcut parola yanlış" }); return; }
         if (String(body.next || "").length < 8) { json(res, 400, { error: "Yeni parola en az 8 karakter olmalı" }); return; }
-        const newVersion = user.session_version + 1;
-        db.prepare("UPDATE users SET pass_hash=?, session_version=? WHERE id=?").run(makeHash(body.next), newVersion, user.id);
-        const tok = sign({ u: user.id, v: newVersion, exp: Date.now() + SESSION_MS });
-        sendMail(user.email, "defter. — parolan değişti", passwordChangedHtml()).catch(() => {});
-        json(res, 200, { ok: true }, { "Set-Cookie": [sessionCookie(user.id, tok)] });
+        const newVersion = identity.session_version + 1;
+        const cookies = [];
+        if (login) {
+          db.prepare("UPDATE logins SET pass_hash=?, session_version=? WHERE id=?").run(makeHash(body.next), newVersion, login.id);
+          for (const pr of projectsForLogin(login.id)) cookies.push(sessionCookie(pr.id, sign({ u: pr.id, v: newVersion, exp: Date.now() + SESSION_MS })));
+        } else {
+          db.prepare("UPDATE users SET pass_hash=?, session_version=? WHERE id=?").run(makeHash(body.next), newVersion, user.id);
+          cookies.push(sessionCookie(user.id, sign({ u: user.id, v: newVersion, exp: Date.now() + SESSION_MS })));
+        }
+        sendMail(identity.email, "defter. — parolan değişti", passwordChangedHtml()).catch(() => {});
+        json(res, 200, { ok: true }, { "Set-Cookie": cookies });
         return;
       }
 
