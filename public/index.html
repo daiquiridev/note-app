@@ -1598,6 +1598,9 @@ function startMic() {
     else mi.classList.remove("show");
   };
   rec.onerror = async e => {
+    if (e.error === "no-speech" || e.error === "aborted") return;
+    const fatal = e.error === "not-allowed" || e.error === "network";
+    if (fatal) stopMic(); // kalıcı hata — sessiz yeniden deneme döngüsüne (ve bildirim yığılmasına) girme
     if (e.error === "not-allowed") toast("Mikrofon izni reddedildi — tarayıcı ayarlarından izin ver");
     else if (e.error === "network") {
       const isBrave = !!(navigator.brave && await navigator.brave.isBrave().catch(() => false));
@@ -1605,7 +1608,7 @@ function startMic() {
         ? "Brave, sesli yazdırmanın kullandığı Google servisini engelliyor — bu özellik için Chrome veya Edge kullan"
         : "Mikrofon servisine ulaşılamadı (network) — internet bağlantısını veya reklam engelleyiciyi kontrol et");
     }
-    else if (e.error !== "no-speech" && e.error !== "aborted") toast("Mikrofon hatası: " + e.error);
+    else toast("Mikrofon hatası: " + e.error);
   };
   rec.onend = () => { if (rec) { try { rec.start(); } catch { stopMic(); } } }; // sessizlikte devam et
   try { rec.start(); } catch { toast("Mikrofon başlatılamadı"); rec = null; return; }
