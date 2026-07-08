@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>defter. — giriş</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='15' y='10' width='70' height='80' rx='10' fill='%234f9d8b'/><rect x='28' y='28' width='44' height='6' rx='3' fill='white' opacity='.9'/><rect x='28' y='44' width='36' height='6' rx='3' fill='white' opacity='.6'/><rect x='28' y='60' width='40' height='6' rx='3' fill='white' opacity='.6'/></svg>">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:-apple-system,"Segoe UI Variable Text","Segoe UI",system-ui,Roboto,sans-serif;
+  min-height:100vh;display:grid;place-items:center;
+  background:linear-gradient(130deg,#faf6ec 0%,#f9f2e9 32%,#eff5f0 66%,#f8f4e9 100%);
+  color:#3a413c;-webkit-font-smoothing:antialiased;
+}
+.card{
+  width:320px;max-width:90vw;text-align:center;padding:34px 28px;border-radius:22px;
+  background:rgba(255,253,247,.8);backdrop-filter:blur(24px) saturate(135%);
+  border:1px solid rgba(255,255,255,.72);
+  box-shadow:0 24px 60px rgba(110,120,105,.14),0 4px 16px rgba(110,120,105,.08);
+}
+.logo{width:52px;height:52px;border-radius:16px;background:linear-gradient(135deg,#71b8a5,#4f9d8b);
+  margin:0 auto 14px;display:grid;place-items:center;box-shadow:0 8px 20px rgba(95,150,130,.3)}
+.logo svg{width:26px;height:26px;stroke:#fff}
+h1{font-size:19px;letter-spacing:-.3px;margin-bottom:4px}
+h1 i{color:#4f9d8b;font-style:normal}
+p{font-size:13px;color:#5f6a62;margin-bottom:20px}
+input{width:100%;text-align:center;font-size:16px;letter-spacing:.1em;padding:11px;border-radius:12px;
+  border:1px solid rgba(125,135,120,.25);background:rgba(255,255,255,.6);outline:none;font-family:inherit;color:inherit}
+input:focus{border-color:#4f9d8b;box-shadow:0 0 0 3px rgba(79,157,139,.12)}
+button{width:100%;margin-top:10px;padding:11px;border:none;border-radius:12px;cursor:pointer;
+  background:#39403b;color:#f7f5ec;font:inherit;font-weight:600;font-size:14.5px}
+button:hover{filter:brightness(1.1)}
+button:disabled{opacity:.6;cursor:wait}
+.err{font-size:12.5px;color:#cf6a5e;min-height:18px;margin-top:10px;font-weight:500}
+.ok{font-size:12.5px;color:#4f9d8b;margin-top:10px;font-weight:500;line-height:1.5}
+.link-row{margin-top:14px}
+.link-row a, .link-row span{font-size:12.5px;color:#98a099;text-decoration:none;cursor:pointer}
+.link-row a:hover, .link-row span:hover{color:#4f9d8b}
+.badge{display:inline-block;font-size:11px;font-weight:700;color:#4f9d8b;background:rgba(79,157,139,.1);
+  border-radius:999px;padding:3px 10px;margin-bottom:14px}
+.card.shake{animation:shake .35s}
+@keyframes shake{20%{transform:translateX(-7px)}40%{transform:translateX(7px)}60%{transform:translateX(-5px)}80%{transform:translateX(4px)}}
+@media (prefers-color-scheme: dark){
+  body{background:linear-gradient(130deg,#242923 0%,#2a2e26 34%,#20302a 68%,#282c22 100%);color:#e9ebe4}
+  .card{background:rgba(46,52,46,.75);border-color:rgba(255,255,255,.12);box-shadow:0 24px 60px rgba(0,0,0,.4)}
+  p{color:#b6beb2}
+  input{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.12)}
+  button{background:#e4e6de;color:#2b302b}
+}
+</style>
+</head>
+<body>
+<form class="card" id="card">
+  <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></div>
+  <h1>defter<i>.</i></h1>
+  <div class="badge" id="addBadge" style="display:none">Hesap ekle</div>
+  <p id="lead">Devam etmek için giriş yap</p>
+  <input type="email" id="em" placeholder="E-posta" autocomplete="username" autofocus style="margin-bottom:8px;letter-spacing:0;font-size:14.5px">
+  <input type="password" id="pw" placeholder="Parola" autocomplete="current-password">
+  <button type="submit" id="btn">Giriş</button>
+  <div class="err" id="err"></div>
+  <div class="link-row" id="loginLinks"><span id="forgotLink">Parolamı unuttum</span></div>
+</form>
+
+<form class="card" id="forgotCard" style="display:none">
+  <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></div>
+  <h1>defter<i>.</i></h1>
+  <p>E-postana bir sıfırlama bağlantısı gönderelim</p>
+  <input type="email" id="fEm" placeholder="E-posta" autocomplete="username" autofocus>
+  <button type="submit" id="fBtn">Bağlantı gönder</button>
+  <div class="err" id="fErr"></div>
+  <div class="ok" id="fOk" style="display:none"></div>
+  <div class="link-row"><span id="backLink">← Girişe dön</span></div>
+</form>
+
+<script>
+const params = new URLSearchParams(location.search);
+const addMode = params.get("add") === "1";
+
+const card = document.getElementById("card"), pw = document.getElementById("pw"),
+      em = document.getElementById("em"), err = document.getElementById("err"), btn = document.getElementById("btn"),
+      lead = document.getElementById("lead"), addBadge = document.getElementById("addBadge"),
+      forgotLink = document.getElementById("forgotLink"), backLink = document.getElementById("backLink"),
+      forgotCard = document.getElementById("forgotCard"), fEm = document.getElementById("fEm"),
+      fBtn = document.getElementById("fBtn"), fErr = document.getElementById("fErr"), fOk = document.getElementById("fOk");
+
+if (addMode) { addBadge.style.display = "inline-block"; lead.textContent = "Başka bir hesapla giriş yap"; }
+
+card.addEventListener("submit", async e => {
+  e.preventDefault();
+  err.textContent = ""; btn.disabled = true;
+  try {
+    const r = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: em.value, password: pw.value })
+    });
+    if (r.ok) { location.href = "/"; return; }
+    const j = await r.json().catch(() => ({}));
+    err.textContent = j.error || "Giriş başarısız";
+    card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
+    pw.value = ""; pw.focus();
+  } catch { err.textContent = "Sunucuya ulaşılamadı"; }
+  btn.disabled = false;
+});
+
+forgotLink.onclick = () => { card.style.display = "none"; forgotCard.style.display = "block"; fEm.value = em.value; fEm.focus(); };
+backLink.onclick = () => { forgotCard.style.display = "none"; card.style.display = "block"; fOk.style.display = "none"; };
+
+forgotCard.addEventListener("submit", async e => {
+  e.preventDefault();
+  fErr.textContent = ""; fBtn.disabled = true;
+  try {
+    const r = await fetch("/api/forgot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: fEm.value })
+    });
+    const j = await r.json().catch(() => ({}));
+    fOk.textContent = j.message || "Eğer bu e-posta kayıtlıysa sıfırlama bağlantısı gönderildi.";
+    fOk.style.display = "block";
+  } catch { fErr.textContent = "Sunucuya ulaşılamadı"; }
+  fBtn.disabled = false;
+});
+</script>
+</body>
+</html>

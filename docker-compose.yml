@@ -1,0 +1,22 @@
+services:
+  defter:
+    build: .
+    container_name: defter_app
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - defter_data:/data
+    networks:
+      - proxy_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  defter_data:
+
+networks:
+  proxy_network:
+    external: true
