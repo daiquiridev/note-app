@@ -495,18 +495,22 @@ input,textarea{font:inherit;color:inherit}
 .tasks-empty{text-align:center;color:var(--muted);padding:50px 0 30px;font-size:14px}
 .tasks-empty svg{width:40px;height:40px;stroke:var(--muted);opacity:.4;margin-bottom:10px}
 
-/* ── Karşılama ─────────────────────────────── */
-.welcome{max-width:520px;margin:12vh auto 0;text-align:center;padding:40px;
-  background:var(--glass);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
-  border:1px solid var(--border);border-radius:28px;box-shadow:var(--shadow)}
-.welcome .big{width:64px;height:64px;border-radius:20px;background:var(--grad);margin:0 auto 20px;
-  display:grid;place-items:center;box-shadow:0 14px 34px rgba(95,150,130,.4)}
-.welcome .big svg{width:32px;height:32px;stroke:#fff}
-.welcome h2{font-size:24px;letter-spacing:-.4px;margin-bottom:8px}
-.welcome p{color:var(--soft);font-size:14.5px;margin-bottom:24px}
-.welcome .row{display:flex;gap:10px;justify-content:center}
+/* ── Özet sayfası ─────────────────────────────── */
+.welcome{max-width:680px;margin:0 auto;padding:14px 10px 60px}
+.welcome-head{padding:8px 0 18px}
+.welcome-head h1{font-size:27px;font-weight:750;letter-spacing:-.5px;margin-bottom:3px}
+.welcome-head p{color:var(--soft);font-size:13.5px;text-transform:capitalize}
+.welcome .row{display:flex;gap:10px;margin:0 0 20px}
 .welcome .row button{display:flex;align-items:center;gap:6px;padding:7px 15px;border-radius:10px;font-weight:600;font-size:13.5px}
 .welcome .row svg{width:15px;height:15px}
+.welcome .sec-label{font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:22px 2px 6px}
+.sum-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;cursor:pointer;font-size:14px}
+.sum-row:hover{background:var(--hover)}
+.sum-row svg{width:15px;height:15px;stroke:var(--muted);flex-shrink:0}
+.sum-row .t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sum-row small{color:var(--muted);font-size:12px;flex-shrink:0}
+.sum-row small.late{color:#fff;background:var(--grad-hot);border-radius:6px;padding:1px 7px;font-weight:600}
+.sum-empty{color:var(--muted);font-size:13.5px;padding:6px 10px 0}
 
 /* ── Palet (Ctrl+K) ─────────────────────────── */
 .overlay{position:fixed;inset:0;background:rgba(105,115,100,.18);backdrop-filter:blur(6px);
@@ -1730,20 +1734,48 @@ $("#btnPin").onclick = () => {
 };
 $("#btnDelete").onclick = () => { if (view.noteId) deleteNote(view.noteId); };
 
-/* ═══════════ karşılama ═══════════ */
+/* ═══════════ özet sayfası ═══════════ */
 function showWelcome() {
   view = { mode: "welcome", noteId: null };
   ["btnMic", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
+  const hour = new Date().getHours();
+  const greet = hour < 6 ? "İyi geceler" : hour < 12 ? "Günaydın" : hour < 18 ? "İyi günler" : "İyi akşamlar";
+  const open = state.tasks.filter(t => !t.done);
+  const late = open.filter(t => t.due && new Date(t.due).getTime() < Date.now());
+  const recent = [...state.notes].sort((a, b) => b.updated - a.updated).slice(0, 5);
+  const upcoming = open.filter(t => t.due).sort((a, b) => a.due - b.due).slice(0, 5);
   $("#content").innerHTML = `
     <div class="welcome">
-      <div class="big"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></div>
-      <h2>Boş bir sayfa seni bekliyor</h2>
-      <p>Yeni bir not oluştur ya da toplantı şablonuyla hızlıca başla.</p>
+      <div class="welcome-head">
+        <h1>${greet}</h1>
+        <p>${fmtFull(Date.now())}</p>
+      </div>
       <div class="row">
         <button class="btn-new" onclick="newNote('note')">${ICONS.plus} Yeni Not</button>
         <button class="btn-meet" onclick="newNote('meeting')">${ICONS.users} Toplantı Notu</button>
       </div>
+      <div class="statbar">
+        <span>${ICONS.doc}<b>${state.notes.length}</b> not</span><i></i>
+        <span>${ICONS.check}<b>${open.length}</b> açık görev</span><i></i>
+        <span${late.length ? ' class="late"' : ""}>${ICONS.bell}<b>${late.length}</b> geciken</span>
+      </div>
+      <div class="sec-label">Son Notlar</div>
+      ${recent.length ? recent.map(n => `
+        <div class="sum-row" data-note="${n.id}">
+          ${n.type === "meeting" ? ICONS.users : ICONS.doc}
+          <span class="t">${esc(n.title) || "Başlıksız"}</span>
+          <small>${fmtRel(n.updated)}</small>
+        </div>`).join("") : `<div class="sum-empty">Henüz not yok.</div>`}
+      <div class="sec-label">Yaklaşan Görevler</div>
+      ${upcoming.length ? upcoming.map(t => `
+        <div class="sum-row" data-task="${t.id}">
+          ${ICONS.check}
+          <span class="t">${esc(t.text)}</span>
+          <small${t.due < Date.now() ? ' class="late"' : ""}>${fmtRel(t.due)}</small>
+        </div>`).join("") : `<div class="sum-empty">Yaklaşan görev yok.</div>`}
     </div>`;
+  $("#content").querySelectorAll("[data-note]").forEach(el => el.onclick = () => openNote(el.dataset.note));
+  $("#content").querySelectorAll("[data-task]").forEach(el => el.onclick = () => openTasks());
   renderSidebar();
 }
 
@@ -2025,6 +2057,12 @@ document.addEventListener("keydown", e => {
     closeAccountModal();
     $("#pomoPop").classList.remove("show");
     $("#keysOverlay").classList.remove("show");
+  }
+  else if (e.key === "Backspace" && !mod && !e.altKey && !e.shiftKey && view.mode !== "welcome") {
+    const t = e.target;
+    const editing = t.matches?.("input, textarea, [contenteditable=\"true\"]") || t.isContentEditable;
+    const overlayOpen = pal.open || document.querySelectorAll(".overlay.show, .lock-overlay.show").length > 0;
+    if (!editing && !overlayOpen) { e.preventDefault(); showWelcome(); }
   }
 });
 
