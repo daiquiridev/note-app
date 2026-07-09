@@ -1,0 +1,6 @@
+name = "defter-stt"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+[ai]
+binding = "AI"

@@ -18,7 +18,7 @@
   --grad-hot:linear-gradient(135deg,#e49080,#d9776b);
   --grad-cool:linear-gradient(135deg,#7cc3ae,#54a58f);
   --danger:#cf6a5e; --warn:#c08b3f; --ok:#4f9d8b;
-  --btn:#39403b; --btn-text:#f7f5ec;
+  --btn:var(--accent); --btn-text:#fff;
   --shadow:0 24px 60px rgba(110,120,105,.14),0 4px 16px rgba(110,120,105,.08);
   --blur:blur(24px) saturate(135%);
   --radius:10px;
@@ -30,7 +30,7 @@
   --border:rgba(255,255,255,.12);
   --hover:rgba(255,255,255,.06); --active:rgba(255,255,255,.11);
   --accent:#82c6b1; --accent-soft:rgba(130,198,177,.12);
-  --btn:#e4e6de; --btn-text:#2b302b;
+  --btn:var(--accent); --btn-text:#fff;
   --shadow:0 24px 60px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.28);
 }
 *{margin:0;padding:0;box-sizing:border-box}
@@ -373,6 +373,19 @@ input,textarea{font:inherit;color:inherit}
 .nav-folder .row-actions .del:hover svg{stroke:var(--danger)}
 .nav-item.ind{margin-left:16px}
 
+/* ── mini açılır menü (klasör "···" vb.) ─── */
+.mini-menu{position:fixed;z-index:90;background:var(--glass3);
+  backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);
+  min-width:180px;padding:5px;display:none}
+.mini-menu.show{display:block}
+.mini-menu button{display:flex;align-items:center;gap:9px;width:100%;padding:7px 9px;border-radius:8px;
+  font-size:13px;color:var(--text);text-align:left}
+.mini-menu button:hover{background:var(--hover)}
+.mini-menu button svg{width:14px;height:14px;stroke:var(--muted);flex-shrink:0}
+.mini-menu button.danger{color:var(--danger)}
+.mini-menu button.danger svg{stroke:var(--danger)}
+
 /* ── Görünüm (tema + renk) — hesap menüsü içinde ─── */
 .theme-seg{display:flex;background:var(--glass2);border:1px solid var(--line);border-radius:10px;padding:2px;margin-top:4px}
 .theme-seg button{flex:1;display:flex;align-items:center;justify-content:center;gap:5px;padding:6px 8px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--soft)}
@@ -486,7 +499,8 @@ input,textarea{font:inherit;color:inherit}
 .task .tk-actions button{padding:4px;border-radius:7px;line-height:0}
 .task .tk-actions button:hover{background:var(--hover)}
 .task .tk-actions svg{width:14px;height:14px;stroke:var(--muted)}
-.task .tk-actions .bell.on svg{stroke:var(--accent);fill:var(--accent-soft)}
+.task .tk-actions .bell.on{background:var(--accent-soft)}
+.task .tk-actions .bell.on svg{stroke:var(--accent);fill:var(--accent)}
 .task .tk-actions .tk-note.on svg{stroke:var(--accent)}
 .task .tk-actions .tk-del:hover svg{stroke:var(--danger)}
 .tk-desc{margin:-4px 14px 10px 41px;padding:4px 10px 8px;font-size:13px;line-height:1.5;color:var(--soft);
@@ -569,11 +583,6 @@ input,textarea{font:inherit;color:inherit}
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="brand"><div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></div><b>defter<i>.</i></b></div>
-    <div class="side-widget">
-      <b id="dwDay"></b>
-      <div class="dw-mid"><span id="dwWeekday"></span><small id="dwMonth"></small></div>
-      <div class="dw-time" id="dwTime"></div>
-    </div>
     <div class="side-search">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       <input id="sideSearch" type="text" placeholder="Ara..." autocomplete="off">
@@ -587,11 +596,16 @@ input,textarea{font:inherit;color:inherit}
     <input type="file" id="importFile" accept=".json" style="display:none">
     <input type="file" id="imgFile" accept="image/*" style="display:none">
     <div class="side-foot">
+      <div class="side-widget">
+        <b id="dwDay"></b>
+        <div class="dw-mid"><span id="dwWeekday"></span><small id="dwMonth"></small></div>
+        <div class="dw-time" id="dwTime"></div>
+      </div>
       <button class="user-card" id="btnAccount" title="Ayarlar">
         <span class="account-btn" id="accountBtnAv"></span>
         <span class="uc-info">
           <span class="uc-email" id="accountBtnEmail"></span>
-          <span class="uc-hint">Ayarlar</span>
+          <span class="uc-hint" id="accountBtnProject">Ayarlar</span>
         </span>
         <svg class="uc-chev" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
       </button>
@@ -609,6 +623,7 @@ input,textarea{font:inherit;color:inherit}
       <span class="save-state" id="saveState">Kaydedildi ✓</span>
       <button class="icon-btn" id="btnPomo" title="Pomodoro zamanlayıcı"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
       <button class="icon-btn" id="btnMic" title="Sesli not (Türkçe yazıya döker)"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0014 0M12 17v4"/></svg></button>
+      <button class="icon-btn" id="btnMeetSTT" title="Toplantı kaydı (sen + sistem sesi ayrı ayrı yazıya dökülür)"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg></button>
       <button class="icon-btn" id="btnPin" title="Sabitle"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 3h6l1 7 3 2H5l3-2z"/></svg></button>
       <button class="icon-btn" id="btnDelete" title="Notu sil"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg></button>
     </div>
@@ -711,6 +726,7 @@ input,textarea{font:inherit;color:inherit}
 
 <div class="toasts" id="toasts"></div>
 <div class="slash-menu" id="slashMenu"></div>
+<div class="mini-menu" id="folderMenu"></div>
 
 <script>window.DEFTER_UID = "__UID__"; window.DEFTER_EMAIL = "__EMAIL__"; window.DEFTER_PROJECT = "__PROJECT__";</script>
 <script>
@@ -743,6 +759,8 @@ const ICONS = {
   play:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4l13 8-13 8z"/></svg>',
   stopSq:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   clock:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  moveTo:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  dots:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
 };
 
 /* ═══════════ durum ═══════════ */
@@ -863,8 +881,7 @@ function renderSidebar() {
         <span class="chev ${closed ? "closed" : ""}">${ICONS.chev}</span>
         ${ICONS.folder}<span class="t">${esc(f.name)}</span><span class="cnt">${notes.length}</span>
         <span class="row-actions">
-          <button class="ren" data-ren="${f.id}" title="Yeniden adlandır">${ICONS.edit}</button>
-          <button class="del" data-fdel="${f.id}" title="Klasörü sil">${ICONS.trash}</button>
+          <button class="mov" data-fmenu="${f.id}" title="Diğer işlemler">${ICONS.dots}</button>
         </span>
       </div>`;
     if (!closed) html += notes.map(n => item(n, true)).join("");
@@ -879,10 +896,8 @@ $("#navList").addEventListener("click", e => {
   const pin = e.target.closest("[data-pin]"), del = e.target.closest("[data-del]");
   if (pin) { const n = noteById(pin.dataset.pin); n.pinned = !n.pinned; n.updated = Date.now(); save(); renderSidebar(); return; }
   if (del) { deleteNote(del.dataset.del); return; }
-  const ren = e.target.closest("[data-ren]");
-  if (ren) { renameFolder(ren.dataset.ren); return; }
-  const fdel = e.target.closest("[data-fdel]");
-  if (fdel) { deleteFolder(fdel.dataset.fdel); return; }
+  const fmenu = e.target.closest("[data-fmenu]");
+  if (fmenu) { e.stopPropagation(); openFolderMenu(fmenu.dataset.fmenu, fmenu); return; }
   const fold = e.target.closest("[data-fold]");
   if (fold) { toggleFold(fold.dataset.fold); return; }
   const nav = e.target.closest("[data-nav]");
@@ -936,10 +951,10 @@ function deleteNote(id) {
 }
 
 function openNote(id, focus) {
-  stopMic();
+  stopMic(); stopMeetSTT();
   const n = noteById(id); if (!n) return showWelcome();
   view = { mode: "note", noteId: id };
-  ["btnMic", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "");
+  ["btnMic", "btnMeetSTT", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "");
   $("#btnPin").classList.toggle("on", !!n.pinned);
   const fld = state.folders.find(f => f.id === n.folderId);
   $("#content").innerHTML = `
@@ -949,16 +964,19 @@ function openNote(id, focus) {
         ${n.type === "meeting" ? `<span class="type-chip">${ICONS.users} Toplantı</span>` : ""}
         <span>${fmtFull(n.created)}</span>
         <span class="meta-chip" data-move title="Klasör değiştir (Ctrl+Alt+F)">${ICONS.folder} ${fld ? esc(fld.name) : "Klasöre taşı"}</span>
+        ${CLOUD ? `<span class="meta-chip" data-pmove title="Başka projeye taşı">${ICONS.moveTo} Projeye taşı</span>` : ""}
       </div>
       <div class="blocks" id="blocks"></div>
     </div>`;
   $(".page-meta [data-move]").addEventListener("click", () => moveNoteToFolder(n.id));
+  $(".page-meta [data-pmove]")?.addEventListener("click", () => moveNoteToProject(n.id));
   const wrap = $("#blocks");
   n.blocks.forEach(b => wrap.appendChild(blockEl(n, b)));
   bindTitle(n);
   renderSidebar();
   if (focus === "title") $("#titleInput").focus();
   else if (focus === "content") { const first = n.blocks.find(b => b.type !== "h3"); if (first) focusBlock(first.id); }
+  setRoute("/not/" + id);
 }
 
 function bindTitle(n) {
@@ -1283,9 +1301,9 @@ document.addEventListener("mousedown", e => { if (slash.open && !e.target.closes
 
 /* ═══════════ görevler ═══════════ */
 function openTasks() {
-  stopMic();
+  stopMic(); stopMeetSTT();
   view = { mode: "tasks", noteId: null };
-  ["btnMic", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
+  ["btnMic", "btnMeetSTT", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
   const open = state.tasks.filter(t => !t.done);
   const done = state.tasks.filter(t => t.done);
   const lateCnt  = open.filter(t => t.due && new Date(t.due).getTime() < Date.now()).length;
@@ -1317,6 +1335,7 @@ function openTasks() {
     state.tasks = state.tasks.filter(t => !t.done); save(); openTasks();
   });
   renderSidebar();
+  setRoute("/gorevler");
 }
 
 function taskRow(t) {
@@ -1329,7 +1348,7 @@ function taskRow(t) {
   return `
     <div class="task ${t.done ? "done" : ""}" data-task="${t.id}">
       <input type="checkbox" class="tk-box" ${t.done ? "checked" : ""}>
-      <div class="tk-text" contenteditable="plaintext-only">${esc(t.text)}</div>
+      <div class="tk-text" contenteditable="true">${esc(t.text)}</div>
       ${spent > 0 || run ? `<span class="time-chip ${run ? "run" : ""}">${ICONS.clock}<b class="val">${run ? fmtDurLive(spent) : fmtDur(spent)}</b></span>` : ""}
       ${due ? `<span class="due-chip ${cls}">${ICONS.cal}${fmtRel(due)}</span>` : ""}
       <span class="tk-actions">
@@ -1338,7 +1357,7 @@ function taskRow(t) {
         <button class="bell ${t.remind ? "on" : ""}" title="${t.remind ? "Hatırlatıcı açık" : "Hatırlatıcı kur"}">${ICONS.bell}</button>
         <button class="tk-del" title="Sil">${ICONS.trash}</button>
       </span>
-    </div>${descOpen ? `<div class="tk-desc" data-task="${t.id}" contenteditable="plaintext-only" data-ph="Açıklama ekle…">${esc(t.desc || "")}</div>` : ""}`;
+    </div>${descOpen ? `<div class="tk-desc" data-task="${t.id}" contenteditable="true" data-ph="Açıklama ekle…">${esc(t.desc || "")}</div>` : ""}`;
 }
 function renderTaskLists() {
   const open = state.tasks.filter(t => !t.done)
@@ -1361,6 +1380,7 @@ function bindTask(el) {
   const txt = el.querySelector(".tk-text");
   txt.addEventListener("blur", () => { t.text = txt.textContent.trim(); t.updated = Date.now(); save(); });
   txt.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); txt.blur(); } });
+  txt.addEventListener("paste", plainPaste);
   el.querySelector(".bell").addEventListener("click", () => {
     if (!t.due) { toast("Önce göreve bir tarih ekle"); return; }
     t.remind = !t.remind; t.notified = false; t.updated = Date.now();
@@ -1386,6 +1406,12 @@ function bindTaskDesc(el) {
     if (v === (t.desc || "")) return;
     t.desc = v; t.updated = Date.now(); save();
   });
+  el.addEventListener("paste", plainPaste);
+}
+function plainPaste(e) {
+  e.preventDefault();
+  const text = (e.clipboardData || window.clipboardData).getData("text/plain");
+  document.execCommand("insertText", false, text);
 }
 function addTask() {
   const text = $("#taskText").value.trim();
@@ -1485,9 +1511,9 @@ setInterval(() => {
 /* ═══════════ takvim ═══════════ */
 let calCur = null, calSel = null;
 function openCal() {
-  stopMic();
+  stopMic(); stopMeetSTT();
   view = { mode: "cal", noteId: null };
-  ["btnMic", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
+  ["btnMic", "btnMeetSTT", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
   const now = new Date();
   if (!calCur) {
     calCur = { y: now.getFullYear(), m: now.getMonth() };
@@ -1495,6 +1521,7 @@ function openCal() {
   }
   renderCal();
   renderSidebar();
+  setRoute("/takvim");
 }
 function calShift(d) {
   let m = calCur.m + d, y = calCur.y;
@@ -1610,7 +1637,7 @@ function startMic() {
     }
     else toast("Mikrofon hatası: " + e.error);
   };
-  rec.onend = () => { if (rec) { try { rec.start(); } catch { stopMic(); } } }; // sessizlikte devam et
+  rec.onend = () => { if (rec) setTimeout(() => restartRec(rec), 200); }; // sessizlikte devam et
   try { rec.start(); } catch { toast("Mikrofon başlatılamadı"); rec = null; return; }
   recStart = Date.now();
   $("#recPill").classList.add("on");
@@ -1620,6 +1647,14 @@ function startMic() {
     $("#recTime").textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
   }, 1000);
   toast("Dinleniyor — konuş, Türkçe yazıya dökülecek");
+}
+function restartRec(r, attempt = 0) {
+  if (rec !== r) return; // stopMic() zaten çağrıldıysa yeniden canlandırma
+  try { r.start(); }
+  catch {
+    if (attempt < 4) setTimeout(() => restartRec(r, attempt + 1), 300 * (attempt + 1));
+    else { stopMic(); toast("Dikte bağlantısı koptu — mikrofonu tekrar başlat"); }
+  }
 }
 function stopMic() {
   if (!rec) return;
@@ -1631,17 +1666,111 @@ function stopMic() {
   $("#micInterim").classList.remove("show");
   $("#recTime").textContent = "00:00";
 }
+/* ═══════════ toplantı sesi (mikrofon + sistem sesi ayrı ayrı, bulut STT) ═══════════ */
+let meetRecs = null, meetStarting = false;
+const STT_CHUNK_MS = 8000;
+const STT_MIME = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"]
+  .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+async function startMeetSTT() {
+  if (view.mode !== "note") { toast("Önce bir not aç"); return; }
+  if (meetRecs || meetStarting) return;
+  meetStarting = true;
+  let micStream, sysStream;
+  try {
+    // ikisi de aynı tıklamanın "kullanıcı jesti" hakkını kullanmalı — sırayla değil eşzamanlı istenmeli,
+    // yoksa ilk izin isteminden sonra jest hakkı tükenir ve ikincisi InvalidStateError ile başarısız olur
+    [micStream, sysStream] = await Promise.all([
+      navigator.mediaDevices.getUserMedia({ audio: true }),
+      navigator.mediaDevices.getDisplayMedia({ audio: true, video: true }),
+    ]);
+  } catch {
+    micStream?.getTracks().forEach(t => t.stop());
+    sysStream?.getTracks().forEach(t => t.stop());
+    meetStarting = false;
+    toast("Mikrofon ve/veya sistem sesi izni verilmedi");
+    return;
+  }
+  // video parçasını burada durdurmuyoruz: Chrome bazı sürümlerde video+ses parçalarını aynı paylaşım
+  // oturumuna bağlıyor — video'yu erken durdurmak ses parçasını da "ended" durumuna düşürüyordu.
+  // Video hiç kullanılmıyor, sadece stopMeetSTT() ile birlikte en sonda durdurulacak.
+  if (!sysStream.getAudioTracks().length) {
+    toast("Ses paylaşılmadı — 'Tüm Ekran' ya da 'Chrome Sekmesi' seçip 'Sesi de paylaş' kutusunu işaretle (tek bir uygulama penceresi paylaşımında ses seçeneği çıkmaz)", undefined, undefined, 6000);
+    micStream.getTracks().forEach(t => t.stop());
+    sysStream.getTracks().forEach(t => t.stop());
+    meetStarting = false;
+    return;
+  }
+  try {
+    meetRecs = { mic: makeMeetRecorder(micStream, "Sen"), sys: makeMeetRecorder(sysStream, "Katılımcılar") };
+  } catch (e) {
+    micStream.getTracks().forEach(t => t.stop());
+    sysStream.getTracks().forEach(t => t.stop());
+    meetRecs = null; meetStarting = false;
+    toast("Kayıt başlatılamadı: " + (e.message || e));
+    return;
+  }
+  sysStream.getAudioTracks()[0].addEventListener("ended", () => stopMeetSTT("sistem sesi paylaşımı kapandı"));
+  micStream.getAudioTracks()[0].addEventListener("ended", () => stopMeetSTT("mikrofon bağlantısı kesildi"));
+  $("#btnMeetSTT").classList.add("on");
+  meetStarting = false;
+  toast("Toplantı kaydı başladı — sen ve sistem sesi ayrı ayrı yazıya dökülecek");
+}
+function makeMeetRecorder(stream, label) {
+  const rec = STT_MIME ? new MediaRecorder(stream, { mimeType: STT_MIME }) : new MediaRecorder(stream);
+  rec.ondataavailable = async e => {
+    if (e.data.size < 3000) return;
+    try {
+      const r = await fetch("/api/stt?lang=tr", { method: "POST", body: e.data });
+      if (!r.ok) { toast(label + " parçası gönderilemedi (HTTP " + r.status + ")"); return; }
+      const j = await r.json();
+      if (j.error) { toast(label + " STT hatası: " + j.error); return; }
+      if (j.text && j.text.trim()) appendLabeledTranscript(label, j.text.trim());
+    } catch (err) { toast(label + " parçası ağ hatasıyla gönderilemedi"); }
+  };
+  // burada stopMeetSTT çağırmıyoruz: MediaRecorder bazı tarayıcılarda uzun sessizlik/düşük seviye
+  // sesle geçici, önemsiz hatalar üretebiliyor — kaydı öldürmek yerine sadece bilgilendiriyoruz
+  rec.onerror = e => toast(label + " kaydında geçici hata: " + (e.error?.message || e.error || "bilinmeyen"));
+  rec.start(STT_CHUNK_MS);
+  return { stream, rec };
+}
+function stopMeetSTT(reason) {
+  if (!meetRecs) return;
+  for (const k of ["mic", "sys"]) {
+    try { meetRecs[k].rec.stop(); } catch {}
+    meetRecs[k].stream.getTracks().forEach(t => t.stop());
+  }
+  meetRecs = null;
+  $("#btnMeetSTT").classList.remove("on");
+  toast(reason ? "Toplantı kaydı durdu — " + reason : "Toplantı kaydı durduruldu");
+}
+$("#btnMeetSTT").onclick = () => meetRecs ? stopMeetSTT() : startMeetSTT();
+function appendLabeledTranscript(label, text) {
+  if (!text) return;
+  const n = noteById(view.noteId); if (!n) return;
+  const block = { id: uid(), type: "p", html: `<b>${esc(label)}:</b> ${esc(text)}` };
+  n.blocks.push(block);
+  n.updated = Date.now();
+  // sadece yeni bloğu ekle — tüm notu yeniden oluşturmak, aynı anda elle yazarken imleci/odağı koparıyordu
+  const wrap = $("#blocks");
+  if (wrap) wrap.appendChild(blockEl(n, block));
+  $("#content").scrollTop = $("#content").scrollHeight;
+  deferSave();
+}
 function appendTranscript(text) {
   if (!text) return;
   const n = noteById(view.noteId); if (!n) return;
+  const wrap = $("#blocks");
   const last = n.blocks[n.blocks.length - 1];
   if (last && last.type === "p" && plain(last.html).trim() === "") {
     last.html = esc(text);
+    const el = blockContentEl(last.id);
+    if (el) el.innerHTML = last.html;
   } else {
-    n.blocks.push({ id: uid(), type: "p", html: esc(text) });
+    const block = { id: uid(), type: "p", html: esc(text) };
+    n.blocks.push(block);
+    if (wrap) wrap.appendChild(blockEl(n, block));
   }
   n.updated = Date.now();
-  rerenderBlocks(n);
   $("#content").scrollTop = $("#content").scrollHeight;
   deferSave();
 }
@@ -1737,7 +1866,7 @@ $("#btnDelete").onclick = () => { if (view.noteId) deleteNote(view.noteId); };
 /* ═══════════ özet sayfası ═══════════ */
 function showWelcome() {
   view = { mode: "welcome", noteId: null };
-  ["btnMic", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
+  ["btnMic", "btnMeetSTT", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
   const hour = new Date().getHours();
   const greet = hour < 6 ? "İyi geceler" : hour < 12 ? "Günaydın" : hour < 18 ? "İyi günler" : "İyi akşamlar";
   const open = state.tasks.filter(t => !t.done);
@@ -1777,6 +1906,7 @@ function showWelcome() {
   $("#content").querySelectorAll("[data-note]").forEach(el => el.onclick = () => openNote(el.dataset.note));
   $("#content").querySelectorAll("[data-task]").forEach(el => el.onclick = () => openTasks());
   renderSidebar();
+  setRoute("/");
 }
 
 /* ═══════════ renk teması ═══════════ */
@@ -1860,6 +1990,89 @@ function moveNoteToFolder(noteId) {
   ]);
 }
 
+/* ═══════════ projeler arası taşıma (İş ↔ Kişisel vb.) ═══════════ */
+async function otherProjects() {
+  if (!CLOUD) return [];
+  try {
+    const r = await fetch("/api/accounts");
+    if (!r.ok) return [];
+    const j = await r.json();
+    return (j.accounts || []).filter(a => a.id !== window.DEFTER_UID);
+  } catch { return []; }
+}
+async function moveNoteToProject(noteId) {
+  const n = noteById(noteId); if (!n) return;
+  const projects = await otherProjects();
+  if (!projects.length) { toast("Bağlı başka proje yok"); return; }
+  openPicker("Projeye taşı… (ok tuşları + Enter)", projects.map(p => ({
+    icon: ICONS.moveTo, label: p.name,
+    run: async () => {
+      try {
+        const r = await fetch("/api/move", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "note", id: n.id, target: p.id })
+        });
+        if (!r.ok) throw 0;
+        state.notes = state.notes.filter(x => x.id !== n.id); save();
+        renderSidebar();
+        state.notes.length ? openNote(state.notes[0].id) : showWelcome();
+        toast(`"${n.title || "Not"}" → ${p.name} projesine taşındı`);
+      } catch { toast("Taşıma başarısız"); }
+    }
+  })));
+}
+async function moveFolderToProject(folderId) {
+  const f = state.folders.find(x => x.id === folderId); if (!f) return;
+  const projects = await otherProjects();
+  if (!projects.length) { toast("Bağlı başka proje yok"); return; }
+  openPicker(`"${f.name}" klasörünü projeye taşı…`, projects.map(p => ({
+    icon: ICONS.moveTo, label: p.name,
+    run: async () => {
+      try {
+        const r = await fetch("/api/move", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "folder", id: f.id, target: p.id })
+        });
+        if (!r.ok) throw 0;
+        const j = await r.json();
+        state.notes = state.notes.filter(n => n.folderId !== f.id);
+        state.folders = state.folders.filter(x => x.id !== f.id);
+        state.collapsed = state.collapsed.filter(x => x !== f.id);
+        save(); renderSidebar();
+        state.notes.length ? openNote(state.notes[0].id) : showWelcome();
+        toast(`"${f.name}" (${j.moved} öğe) → ${p.name} projesine taşındı`);
+      } catch { toast("Taşıma başarısız"); }
+    }
+  })));
+}
+
+/* ── klasör satırı "···" menüsü ─── */
+let folderMenuFor = null;
+function openFolderMenu(id, btn) {
+  folderMenuFor = id;
+  const menu = $("#folderMenu");
+  menu.innerHTML = `
+    <button data-act="ren">${ICONS.edit}Yeniden adlandır</button>
+    <button data-act="fmove">${ICONS.moveTo}Projeye taşı</button>
+    <button data-act="fdel" class="danger">${ICONS.trash}Sil</button>
+  `;
+  const r = btn.getBoundingClientRect();
+  menu.classList.add("show");
+  menu.style.top = (r.bottom + 4) + "px";
+  menu.style.left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 10) + "px";
+}
+function closeFolderMenu() { $("#folderMenu").classList.remove("show"); folderMenuFor = null; }
+$("#folderMenu").addEventListener("click", e => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const id = folderMenuFor; closeFolderMenu();
+  if (b.dataset.act === "ren") renameFolder(id);
+  else if (b.dataset.act === "fmove") moveFolderToProject(id);
+  else if (b.dataset.act === "fdel") deleteFolder(id);
+});
+document.addEventListener("click", e => {
+  if ($("#folderMenu").classList.contains("show") && !e.target.closest("#folderMenu") && !e.target.closest("[data-fmenu]")) closeFolderMenu();
+});
+
 /* ═══════════ kilit (PIN) ═══════════ */
 let lockedNow = false;
 async function pinDigest(pin) {
@@ -1884,7 +2097,7 @@ async function setPin() {
 function lockNow() {
   if (!state.pin) { toast("Önce PIN ayarla: Ctrl+K → \"PIN\""); return; }
   lockedNow = true;
-  stopMic();
+  stopMic(); stopMeetSTT();
   closePalette(); closeSlash(); togglePomoPop(false);
   $("#lockOverlay").classList.add("show");
   const i = $("#lockInput"); i.value = ""; i.placeholder = "PIN";
@@ -1941,6 +2154,7 @@ function renderPalette(q) {
     { icon: ICONS.cal,    label: "Takvimi aç",               kw: "takvim calendar ay ajanda", run: openCal },
     { icon: ICONS.folder, label: "Yeni klasör",              kw: "klasor folder yeni marka",  run: newFolder },
     { icon: ICONS.folder, label: "Notu klasöre taşı",        kw: "tasi klasor move nota",     run: () => view.noteId ? moveNoteToFolder(view.noteId) : toast("Önce bir not aç") },
+    ...(CLOUD ? [{ icon: ICONS.moveTo, label: "Notu başka projeye taşı", kw: "tasi proje move is kisisel project", run: () => view.noteId ? moveNoteToProject(view.noteId) : toast("Önce bir not aç") }] : []),
     { icon: ICONS.play,   label: "Görevde süre başlat",      kw: "sure zaman takip timer kronometre baslat", run: pickTrackTask },
     ...(state.tracking ? [{ icon: ICONS.stopSq, label: "Süre takibini durdur", kw: "sure zaman durdur stop", run: () => { stopTrack(); if (view.mode === "tasks") renderTaskLists(); } }] : []),
     { icon: ICONS.moon,   label: "Pomodoro'yu aç",           kw: "pomodoro zamanlayici odak sayac", run: () => togglePomoPop(true) },
@@ -2053,6 +2267,7 @@ document.addEventListener("keydown", e => {
   }
   else if (e.key === "Escape") {
     closeSlash();
+    closeFolderMenu();
     if (pal.open) closePalette();
     closeAccountModal();
     $("#pomoPop").classList.remove("show");
@@ -2088,11 +2303,32 @@ function adoptServer(j) {
 }
 function hydrate() {
   applyTheme(); applyAccent(); renderSidebar();
+  // sunucudan "değişiklik var" sinyaliyle gelen bir yenileme, tam o an bir bloğa/başlığa
+  // yazarken notu yeniden açıp imleci/odağı koparmasın — state zaten güncellendi, görsel
+  // yenileme kullanıcı yazmayı bırakınca (blur/navigasyon) doğal olarak gerçekleşecek
+  const activelyEditing = view.mode === "note" && document.activeElement &&
+    (document.activeElement.closest?.("#blocks") || document.activeElement.id === "titleInput");
+  if (activelyEditing && noteById(view.noteId)) return;
+  if (routeFromLocation()) return;
   if (view.mode === "tasks") openTasks();
   else if (view.mode === "cal") openCal();
   else if (view.mode === "note" && noteById(view.noteId)) openNote(view.noteId);
   else state.notes.length ? openNote(state.notes.sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated))[0].id) : showWelcome();
 }
+
+/* ═══════════ URL yönlendirme — yer imlenebilir not/görev/takvim linkleri ═══════════ */
+function setRoute(path) {
+  if (location.pathname !== path) history.pushState(null, "", path);
+}
+function routeFromLocation() {
+  const path = location.pathname;
+  const m = path.match(/^\/not\/([a-zA-Z0-9_-]+)$/);
+  if (m && noteById(m[1])) { openNote(m[1]); return true; }
+  if (path === "/gorevler") { openTasks(); return true; }
+  if (path === "/takvim") { openCal(); return true; }
+  return false;
+}
+window.addEventListener("popstate", () => { if (!routeFromLocation()) showWelcome(); });
 async function cloudPull(initial = false) {
   if (!CLOUD) return;
   try {
@@ -2142,6 +2378,7 @@ function setAccountAvatar(email) {
   $("#accountBtnAv").textContent = initials(email);
   $("#accountBtnEmail").textContent = email || "";
   $("#acctCurrentEmail").textContent = email || "";
+  if (window.DEFTER_PROJECT) $("#accountBtnProject").textContent = window.DEFTER_PROJECT + " · Ayarlar";
 }
 async function loadAccountList() {
   let accounts = [], active = window.DEFTER_UID;
@@ -2226,7 +2463,7 @@ else {
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!state.theme) applyTheme(); });
 if (!SR) $("#btnMic").title = "Sesli yazdırma bu tarayıcıda yok (Chrome/Edge gerekir)";
-showWelcome();
+if (!routeFromLocation()) showWelcome();
 </script>
 </body>
 </html>

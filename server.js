@@ -21,6 +21,8 @@ const RESET_MS = 30 * 60 * 1000;                      // parola sıfırlama link
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const MAIL_FROM = process.env.MAIL_FROM || "defter <defter@m.daiquiri.dev>";
 const APP_URL = process.env.APP_URL || "https://defter.daiquiri.dev";
+const STT_WORKER_URL = process.env.STT_WORKER_URL || "";
+const STT_WORKER_SECRET = process.env.STT_WORKER_SECRET || "";
 
 if (!SECRET) { console.error("SECRET ortam değişkeni gerekli"); process.exit(1); }
 
@@ -242,6 +244,25 @@ function deleteItem(uid, kind, id) {
     if (r.changes) db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(uid, seq);
     db.exec("COMMIT");
     return !!r.changes;
+  } catch (e) { db.exec("ROLLBACK"); throw e; }
+}
+/* öğeleri (not/klasör) bir projeden diğerine taşı — kaynakta tombstone, hedefte yeni seq'le yaz */
+function moveItems(fromUid, toUid, moves) {
+  db.exec("BEGIN");
+  try {
+    let fromSeq = (db.prepare("SELECT seq FROM meta WHERE user_id=?").get(fromUid) || { seq: 0 }).seq;
+    let toSeq = (db.prepare("SELECT seq FROM meta WHERE user_id=?").get(toUid) || { seq: 0 }).seq;
+    const now = Date.now();
+    const del = db.prepare("UPDATE items SET deleted=1, json=NULL, updated=?, seq=? WHERE user_id=? AND kind=? AND id=? AND deleted=0");
+    const ins = db.prepare(`INSERT INTO items(user_id,kind,id,updated,deleted,seq,json) VALUES(?,?,?,?,0,?,?)
+      ON CONFLICT(user_id,kind,id) DO UPDATE SET updated=excluded.updated,deleted=0,seq=excluded.seq,json=excluded.json`);
+    for (const m of moves) {
+      fromSeq++; del.run(now, fromSeq, fromUid, m.kind, m.id);
+      toSeq++; ins.run(toUid, m.kind, m.id, now, toSeq, JSON.stringify(m.obj));
+    }
+    db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(fromUid, fromSeq);
+    db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(toUid, toSeq);
+    db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }
 }
 function listItems(uid, kind) {
@@ -726,6 +747,18 @@ function readBody(req) {
     req.on("error", rej);
   });
 }
+function readBodyBuffer(req) {
+  return new Promise((res, rej) => {
+    let size = 0; const chunks = [];
+    req.on("data", c => {
+      size += c.length;
+      if (size > MAX_BODY) { rej(new Error("büyük")); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on("end", () => res(Buffer.concat(chunks)));
+    req.on("error", rej);
+  });
+}
 function json(res, code, obj, headers = {}) {
   res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "X-Robots-Tag": "noindex", ...headers });
   res.end(JSON.stringify(obj));
@@ -1046,13 +1079,60 @@ http.createServer(async (req, res) => {
         return;
       }
 
+      if (p === "/api/move" && req.method === "POST") {
+        let body = {};
+        try { body = JSON.parse(await readBody(req)); } catch {}
+        const kind = body.kind, id = String(body.id || "");
+        const targetUid = String(body.target || "");
+        if (!["note", "folder"].includes(kind) || !id || !targetUid) { json(res, 400, { error: "Eksik parametre" }); return; }
+        if (targetUid === user.id) { json(res, 400, { error: "Zaten bu projede" }); return; }
+        if (!sessionFor(req, targetUid)) { json(res, 403, { error: "Hedef projeye erişimin yok" }); return; }
+        const moves = [];
+        if (kind === "note") {
+          const row = db.prepare("SELECT json FROM items WHERE user_id=? AND kind='note' AND id=? AND deleted=0").get(user.id, id);
+          if (!row) { json(res, 404, { error: "Not bulunamadı" }); return; }
+          const note = JSON.parse(row.json);
+          note.folderId = null; // klasörler proje bazlı — hedefte aynı klasör yok
+          moves.push({ kind: "note", id, obj: note });
+        } else {
+          const frow = db.prepare("SELECT json FROM items WHERE user_id=? AND kind='folder' AND id=? AND deleted=0").get(user.id, id);
+          if (!frow) { json(res, 404, { error: "Klasör bulunamadı" }); return; }
+          moves.push({ kind: "folder", id, obj: JSON.parse(frow.json) });
+          for (const n of db.prepare("SELECT id,json FROM items WHERE user_id=? AND kind='note' AND deleted=0").all(user.id)) {
+            const obj = JSON.parse(n.json);
+            if (obj.folderId === id) moves.push({ kind: "note", id: n.id, obj });
+          }
+        }
+        try { moveItems(user.id, targetUid, moves); } catch (e) { json(res, 500, { error: "Taşıma başarısız" }); return; }
+        json(res, 200, { ok: true, moved: moves.length });
+        return;
+      }
+
+      if (p === "/api/stt" && req.method === "POST") {
+        if (!STT_WORKER_URL || !STT_WORKER_SECRET) { json(res, 500, { error: "STT yapılandırılmamış" }); return; }
+        const lang = url.searchParams.get("lang") || "tr";
+        let audio;
+        try { audio = await readBodyBuffer(req); } catch { json(res, 400, { error: "Geçersiz ses verisi" }); return; }
+        if (!audio.length) { json(res, 400, { error: "Boş ses verisi" }); return; }
+        try {
+          const r = await fetch(STT_WORKER_URL + "?lang=" + encodeURIComponent(lang), {
+            method: "POST",
+            headers: { Authorization: "Bearer " + STT_WORKER_SECRET, "Content-Type": "application/octet-stream" },
+            body: audio,
+          });
+          const j = await r.json();
+          json(res, r.status, j);
+        } catch (e) { json(res, 502, { error: "STT servisine ulaşılamadı" }); }
+        return;
+      }
+
       json(res, 404, { error: "Yok" });
       return;
     }
 
-    if (p === "/") {
+    if (p === "/" || /^\/not\/[a-zA-Z0-9_-]+$/.test(p) || p === "/gorevler" || p === "/takvim") {
       const user = authedUser(req);
-      if (!user) { res.writeHead(302, { Location: "/login" }); res.end(); return; }
+      if (!user) { res.writeHead(302, { Location: "/login?return=" + encodeURIComponent(p) }); res.end(); return; }
       html(res, 200, renderIndex(user));
       return;
     }
