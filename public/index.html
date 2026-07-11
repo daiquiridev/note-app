@@ -713,6 +713,7 @@ input,textarea{font:inherit;color:inherit}
     <div class="krow"><span>Ara &amp; komut paleti</span><kbd>Ctrl K</kbd></div>
     <div class="krow"><span>Yeni not</span><kbd>Ctrl Alt N</kbd></div>
     <div class="krow"><span>Toplantı notu</span><kbd>Ctrl Alt M</kbd></div>
+    <div class="krow"><span>Bugünün notu</span><kbd>Ctrl Alt G</kbd></div>
     <div class="krow"><span>Görevler</span><kbd>Ctrl Alt T</kbd></div>
     <div class="krow"><span>Takvim</span><kbd>Ctrl Alt C</kbd></div>
     <div class="krow"><span>Pomodoro</span><kbd>Ctrl Alt P</kbd></div>
@@ -818,6 +819,7 @@ let freshDevice = false;
 let state = load();
 state.folders = state.folders || [];
 state.collapsed = state.collapsed || [];
+state.templates = state.templates || [];
 let view = { mode: "note", noteId: null };   // mode: note | tasks | cal | welcome
 const expandedTasks = new Set();   // görevlerde açıklama alanı açık olanlar (sayfa yüklemesi süresince)
 let saveTimer = null, undoBuf = null;
@@ -980,6 +982,66 @@ function newNote(type = "note") {
   return n;
 }
 $("#btnNewNote").onclick = () => newNote("note");
+
+/* ═══════════ günlük not ═══════════ */
+function openDailyNote() {
+  const title = "Günlük — " + new Date().toLocaleDateString("tr-TR", { day: "numeric", month: "long", year: "numeric" });
+  const existing = state.notes.find(n => n.title === title);
+  if (existing) { openNote(existing.id); return; }
+  const now = Date.now();
+  const n = {
+    id: uid(), title, type: "note", pinned: false, created: now, updated: now,
+    blocks: [
+      { id: uid(), type: "h3", html: "Notlar" }, { id: uid(), type: "p", html: "" },
+      { id: uid(), type: "h3", html: "Yapılacaklar" }, { id: uid(), type: "todo", html: "", checked: false },
+    ]
+  };
+  state.notes.unshift(n); save();
+  openNote(n.id, "content");
+  toast("Günlük not hazır");
+}
+
+/* ═══════════ şablonlar ═══════════ */
+function saveAsTemplate(note) {
+  promptInput("Şablon adı…", note.title || "").then(name => {
+    if (!name) return;
+    state.templates = state.templates || [];
+    state.templates.push({
+      id: uid(), name, created: Date.now(),
+      blocks: note.blocks.map(b => ({ ...b, id: uid() })), // gövdeyi kopyala, blok id'leri özgün üret
+    });
+    save();
+    toast(`"${name}" şablon olarak kaydedildi`);
+  });
+}
+function newNoteFromTemplate() {
+  const templates = state.templates || [];
+  if (!templates.length) { toast("Henüz şablon yok — bir notu şablon olarak kaydet"); return; }
+  openPicker("Şablon seç… (ok tuşları + Enter)", templates.map(t => ({
+    icon: ICONS.copy, label: t.name,
+    run: () => {
+      const now = Date.now();
+      const n = {
+        id: uid(), title: t.name, type: "note", pinned: false, created: now, updated: now,
+        blocks: t.blocks.map(b => ({ ...b, id: uid() })), // yeni notta da özgün blok id'leri
+      };
+      state.notes.unshift(n); save();
+      openNote(n.id, "title");
+    }
+  })));
+}
+function manageTemplates() {
+  const templates = state.templates || [];
+  if (!templates.length) { toast("Henüz şablon yok"); return; }
+  openPicker("Silmek için bir şablon seç…", templates.map(t => ({
+    icon: ICONS.trash, label: t.name,
+    run: () => {
+      state.templates = (state.templates || []).filter(x => x.id !== t.id);
+      save();
+      toast(`"${t.name}" silindi`);
+    }
+  })));
+}
 $("#btnNewMeeting").onclick = () => { newNote("meeting"); toast("Toplantı notu hazır — mikrofonla sesli yazdırabilirsin"); };
 
 function deleteNote(id) {
@@ -1015,11 +1077,13 @@ function openNote(id, focus) {
         <span>${fmtFull(n.created)}</span>
         <span class="meta-chip" data-move title="Klasör değiştir (Ctrl+Alt+F)">${ICONS.folder} ${fld ? esc(fld.name) : "Klasöre taşı"}</span>
         ${CLOUD ? `<span class="meta-chip" data-pmove title="Başka projeye taşı">${ICONS.moveTo} Projeye taşı</span>` : ""}
+        <span class="meta-chip" data-savetpl title="Bu notu şablon olarak kaydet">${ICONS.copy} Şablon kaydet</span>
       </div>
       <div class="blocks" id="blocks"></div>
     </div>`;
   $(".page-meta [data-move]").addEventListener("click", () => moveNoteToFolder(n.id));
   $(".page-meta [data-pmove]")?.addEventListener("click", () => moveNoteToProject(n.id));
+  $(".page-meta [data-savetpl]").addEventListener("click", () => saveAsTemplate(n));
   const wrap = $("#blocks");
   visibleBlocks(n).forEach(b => wrap.appendChild(blockEl(n, b)));
   bindTitle(n);
@@ -2151,6 +2215,7 @@ function showWelcome() {
       <div class="row">
         <button class="btn-new" onclick="newNote('note')">${ICONS.plus} Yeni Not</button>
         <button class="btn-meet" onclick="newNote('meeting')">${ICONS.users} Toplantı Notu</button>
+        <button class="btn-meet" onclick="openDailyNote()">${ICONS.cal} Bugünün Notu</button>
       </div>
       <div class="statbar">
         <span>${ICONS.doc}<b>${state.notes.length}</b> not</span><i></i>
@@ -2419,6 +2484,10 @@ function renderPalette(q) {
   const actions = [
     { icon: ICONS.plus,   label: "Yeni not oluştur",        kw: "yeni not olustur new",      run: () => newNote("note") },
     { icon: ICONS.users,  label: "Yeni toplantı notu",       kw: "toplanti meeting yeni",     run: () => newNote("meeting") },
+    { icon: ICONS.cal,    label: "Bugünün notu",             kw: "gunluk bugun daily journal", run: openDailyNote },
+    { icon: ICONS.copy,   label: "Şablondan yeni not",       kw: "sablon template yeni not",  run: newNoteFromTemplate },
+    { icon: ICONS.copy,   label: "Notu şablon olarak kaydet", kw: "sablon template kaydet",   run: () => { const n = noteById(view.noteId); n ? saveAsTemplate(n) : toast("Önce bir not aç"); } },
+    { icon: ICONS.trash,  label: "Şablonları yönet",          kw: "sablon template sil yonet", run: manageTemplates },
     { icon: ICONS.check,  label: "Görevleri aç",             kw: "gorev task yapilacak",      run: openTasks },
     { icon: ICONS.cal,    label: "Takvimi aç",               kw: "takvim calendar ay ajanda", run: openCal },
     { icon: ICONS.folder, label: "Yeni klasör",              kw: "klasor folder yeni marka",  run: newFolder },
@@ -2530,6 +2599,7 @@ $("#importFile").addEventListener("change", e => {
       state = data;
       state.folders = state.folders || [];
       state.collapsed = state.collapsed || [];
+      state.templates = state.templates || [];
       save(); applyTheme(); applyAccent();
       state.notes[0] ? openNote(state.notes[0].id) : showWelcome();
       toast("Veriler içe aktarıldı ✓");
@@ -2564,6 +2634,7 @@ document.addEventListener("keydown", e => {
     else if (k === "f") { e.preventDefault(); view.noteId ? moveNoteToFolder(view.noteId) : newFolder(); }
     else if (k === "s") { e.preventDefault(); $("#sideSearch").focus(); }
     else if (k === "l") { e.preventDefault(); lockNow(); }
+    else if (k === "g") { e.preventDefault(); openDailyNote(); }
   }
   else if (e.key === "Escape") {
     closeSlash();
@@ -2597,7 +2668,7 @@ function rememberSeq(seq) {
 function adoptServer(j) {
   state = j.data;
   state.notes = state.notes || []; state.tasks = state.tasks || [];
-  state.folders = state.folders || []; state.collapsed = state.collapsed || [];
+  state.folders = state.folders || []; state.collapsed = state.collapsed || []; state.templates = state.templates || [];
   rememberSeq(j.seq);
   try { localStorage.setItem(STORE, JSON.stringify(state)); } catch {}
   hydrate();

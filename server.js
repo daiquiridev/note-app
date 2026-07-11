@@ -198,7 +198,7 @@ function collectClientItems(data) {
   for (const f of data.folders || []) out.push({ kind: "folder", id: String(f.id), updated: f.updated || f.created || 0, json: f });
   out.push({
     kind: "settings", id: "main", updated: data.mtime || 0,
-    json: { theme: data.theme ?? null, accent: data.accent ?? null, pin: data.pin ?? null, collapsed: data.collapsed || [], tracking: data.tracking ?? null }
+    json: { theme: data.theme ?? null, accent: data.accent ?? null, pin: data.pin ?? null, collapsed: data.collapsed || [], tracking: data.tracking ?? null, templates: data.templates || [] }
   });
   return out;
 }
@@ -236,7 +236,7 @@ function syncUser(uid, baseSeq, data) {
 function buildState(uid) {
   const rows = db.prepare("SELECT kind,json,updated FROM items WHERE user_id=? AND deleted=0 ORDER BY rowid").all(uid);
   if (!rows.length) return null;
-  const s = { notes: [], tasks: [], folders: [], theme: null, accent: null, pin: null, collapsed: [], mtime: 0 };
+  const s = { notes: [], tasks: [], folders: [], theme: null, accent: null, pin: null, collapsed: [], templates: [], mtime: 0 };
   for (const r of rows) {
     const obj = JSON.parse(r.json);
     if (r.kind === "note") s.notes.push(obj);

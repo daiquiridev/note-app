@@ -134,6 +134,15 @@ try {
     const wr = await api("/api/search?q=" + encodeURIComponent(weird));
     ok(wr.status === 200, `arama '${weird}' ile 500 vermiyor`, String(wr.status));
   }
+
+  console.log("8) şablonlar (settings blob üzerinden senkron)");
+  const curForTpl = await (await api("/api/data")).json();
+  const tplData = { notes: curForTpl.data?.notes || [], tasks: [], folders: [], mtime: Date.now(),
+    templates: [{ id: "tpl1", name: "Test Şablonu", created: Date.now(), blocks: [{ id: "tb1", type: "p", html: "şablon içeriği" }] }] };
+  const s5 = await api("/api/sync", { method: "POST", body: JSON.stringify({ baseSeq: curForTpl.seq, data: tplData }) });
+  ok(s5.status === 200, "şablonlu push kabul edildi", String(s5.status));
+  const d6 = await (await api("/api/data")).json();
+  ok((d6.data?.templates || []).some(t => t.id === "tpl1"), "şablon sunucuda kalıcı (settings blob roundtrip)");
 } catch (e) {
   console.error("beklenmeyen hata:", e);
   failed++;
