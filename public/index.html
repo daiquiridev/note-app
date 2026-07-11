@@ -497,7 +497,7 @@ input,textarea{font:inherit;color:inherit}
   transition:opacity .2s, transform .12s, box-shadow .12s}
 .task:hover{transform:translateY(-1px);box-shadow:0 10px 26px rgba(110,120,105,.12)}
 .task .tk-box{width:17px;height:17px;flex-shrink:0;appearance:none;border:1.5px solid var(--muted);
-  border-radius:50%;cursor:pointer;display:grid;place-items:center;transition:all .12s}
+  border-radius:50%;cursor:pointer;display:grid;place-items:center;transition:background .12s,border-color .12s}
 .task .tk-box:checked{background:var(--grad);border-color:transparent}
 .task .tk-box:checked::after{content:"";width:9px;height:9px;
   background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E") center/contain no-repeat}
@@ -956,17 +956,18 @@ $("#btnNewMeeting").onclick = () => { newNote("meeting"); toast("Toplantı notu 
 function deleteNote(id) {
   const i = state.notes.findIndex(n => n.id === id);
   if (i < 0) return;
-  undoBuf = { note: state.notes[i], index: i };
+  const buf = { note: state.notes[i], index: i };  // closure'da tut — art arda silmede global tampon yanlış notu geri getirirdi
+  undoBuf = buf;
   state.notes.splice(i, 1); save();
   if (view.noteId === id) {
-    const next = state.notes.sort((a, b) => b.updated - a.updated)[0];
+    const next = [...state.notes].sort((a, b) => b.updated - a.updated)[0];
     next ? openNote(next.id) : showWelcome();
   }
   renderSidebar();
   toast("Not silindi", "Geri Al", () => {
-    undoBuf.note.updated = Date.now();
-    state.notes.splice(undoBuf.index, 0, undoBuf.note); save();
-    openNote(undoBuf.note.id);
+    buf.note.updated = Date.now();
+    state.notes.splice(Math.min(buf.index, state.notes.length), 0, buf.note); save();
+    openNote(buf.note.id);
   });
 }
 
@@ -1866,28 +1867,43 @@ async function startMeetSTT() {
   toast("Toplantı kaydı başladı — sen ve sistem sesi ayrı ayrı yazıya dökülecek");
 }
 function makeMeetRecorder(stream, label) {
-  const rec = STT_MIME ? new MediaRecorder(stream, { mimeType: STT_MIME }) : new MediaRecorder(stream);
-  rec.ondataavailable = async e => {
-    if (e.data.size < 3000) return;
-    try {
-      const r = await fetch("/api/stt?lang=tr", { method: "POST", body: e.data });
-      if (!r.ok) { toast(label + " parçası gönderilemedi (HTTP " + r.status + ")"); return; }
-      const j = await r.json();
-      if (j.error) { toast(label + " STT hatası: " + j.error); return; }
-      if (j.text && j.text.trim()) appendLabeledTranscript(label, j.text.trim());
-    } catch (err) { toast(label + " parçası ağ hatasıyla gönderilemedi"); }
+  // rec.start(timeslice) KULLANMIYORUZ: dilimli kayıtta yalnızca ilk blob tam bir WebM dosyasıdır,
+  // sonrakiler container başlığı olmayan devam parçalarıdır ve tek başına decode edilemez (Whisper
+  // 2. parçadan itibaren bozuk sonuç üretir). Bunun yerine her parça için kaydediciyi durdurup
+  // yeniden başlatıyoruz — böylece her blob kendi başına geçerli, tam bir ses dosyası olur.
+  const h = { stream, rec: null, timer: null, stopped: false };
+  const cycle = () => {
+    if (h.stopped) return;
+    const rec = STT_MIME ? new MediaRecorder(stream, { mimeType: STT_MIME }) : new MediaRecorder(stream);
+    h.rec = rec;
+    rec.ondataavailable = async e => {
+      if (e.data.size < 3000) return;
+      try {
+        const r = await fetch("/api/stt?lang=tr", { method: "POST", body: e.data });
+        if (!r.ok) { toast(label + " parçası gönderilemedi (HTTP " + r.status + ")"); return; }
+        const j = await r.json();
+        if (j.error) { toast(label + " STT hatası: " + j.error); return; }
+        if (j.text && j.text.trim()) appendLabeledTranscript(label, j.text.trim());
+      } catch (err) { toast(label + " parçası ağ hatasıyla gönderilemedi"); }
+    };
+    // burada stopMeetSTT çağırmıyoruz: MediaRecorder bazı tarayıcılarda uzun sessizlik/düşük seviye
+    // sesle geçici, önemsiz hatalar üretebiliyor — kaydı öldürmek yerine sadece bilgilendiriyoruz
+    rec.onerror = e => toast(label + " kaydında geçici hata: " + (e.error?.message || e.error || "bilinmeyen"));
+    rec.onstop = () => { if (!h.stopped) cycle(); };
+    rec.start();
+    h.timer = setTimeout(() => { try { rec.stop(); } catch {} }, STT_CHUNK_MS);
   };
-  // burada stopMeetSTT çağırmıyoruz: MediaRecorder bazı tarayıcılarda uzun sessizlik/düşük seviye
-  // sesle geçici, önemsiz hatalar üretebiliyor — kaydı öldürmek yerine sadece bilgilendiriyoruz
-  rec.onerror = e => toast(label + " kaydında geçici hata: " + (e.error?.message || e.error || "bilinmeyen"));
-  rec.start(STT_CHUNK_MS);
-  return { stream, rec };
+  cycle();
+  return h;
 }
 function stopMeetSTT(reason) {
   if (!meetRecs) return;
   for (const k of ["mic", "sys"]) {
-    try { meetRecs[k].rec.stop(); } catch {}
-    meetRecs[k].stream.getTracks().forEach(t => t.stop());
+    const h = meetRecs[k];
+    h.stopped = true;
+    clearTimeout(h.timer);
+    try { h.rec.stop(); } catch {}   // son parça ondataavailable ile yine gönderilir
+    h.stream.getTracks().forEach(t => t.stop());
   }
   meetRecs = null;
   $("#btnMeetSTT").classList.remove("on");
@@ -2466,7 +2482,7 @@ function hydrate() {
   if (view.mode === "tasks") openTasks();
   else if (view.mode === "cal") openCal();
   else if (view.mode === "note" && noteById(view.noteId)) openNote(view.noteId);
-  else state.notes.length ? openNote(state.notes.sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated))[0].id) : showWelcome();
+  else state.notes.length ? openNote([...state.notes].sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated))[0].id) : showWelcome();
 }
 
 /* ═══════════ URL yönlendirme — yer imlenebilir not/görev/takvim linkleri ═══════════ */

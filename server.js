@@ -447,6 +447,14 @@ function issueToken(clientId, loginId, kind, ttlMs) {
     .run(hash, clientId, loginId, kind, ttlMs ? Date.now() + ttlMs : null, Date.now());
   return tok;
 }
+/* süresi dolan/kullanılmış OAuth ve parola-sıfırlama kayıtlarını temizle — tablo büyümesini sınırlar */
+function cleanupOauth() {
+  const now = Date.now();
+  db.prepare("DELETE FROM oauth_tokens WHERE expires IS NOT NULL AND expires < ?").run(now);
+  db.prepare("DELETE FROM oauth_codes WHERE used=1 OR expires < ?").run(now);
+  db.prepare("DELETE FROM password_resets WHERE used=1 OR expires < ?").run(now);
+}
+cleanupOauth(); // açılışta bir kez; sonrasında her /token isteğinde
 function parseForm(s) { return Object.fromEntries(new URLSearchParams(s)); }
 function authRedirectError(res, redirectUri, state, error, desc) {
   const u = new URL(redirectUri);
@@ -590,10 +598,13 @@ if (process.argv[2] === "mcp-key-revoke") {
 const INDEX_TPL = fs.readFileSync(path.join(__dirname, "public", "index.html"), "utf8");
 const LOGIN = fs.readFileSync(path.join(__dirname, "public", "login.html"));
 const RESET_PAGE = fs.readFileSync(path.join(__dirname, "public", "reset.html"));
+/* JS string literal olarak güvenli göm: JSON.stringify "</script>" dizisini kaçırmaz (script
+   bloğundan kaçışa izin verir) ve String.replace "$&" gibi kalıpları işler — ikisine de kapalı */
+const jsStr = v => JSON.stringify(String(v)).replace(/</g, "\\u003c");
 const renderIndex = project => INDEX_TPL
-  .replace('"__UID__"', JSON.stringify(project.id))
-  .replace('"__EMAIL__"', JSON.stringify((loginOf(project) || project).email))
-  .replace('"__PROJECT__"', JSON.stringify(project.name || project.id));
+  .split('"__UID__"').join(jsStr(project.id))
+  .split('"__EMAIL__"').join(jsStr((loginOf(project) || project).email))
+  .split('"__PROJECT__"').join(jsStr(project.name || project.id));
 
 /* ── e-posta (Resend REST API, npm bağımlılığı yok) ── */
 const escHtml = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -867,6 +878,7 @@ http.createServer(async (req, res) => {
 
     if (p === "/token" && req.method === "POST") {
       if (limited(ip)) { json(res, 429, { error: "slow_down" }); return; }
+      cleanupOauth();
       const raw = await readBody(req);
       const ct = req.headers["content-type"] || "";
       let body;
@@ -899,8 +911,12 @@ http.createServer(async (req, res) => {
         const rHash = crypto.createHash("sha256").update(String(body.refresh_token || "")).digest("hex");
         const row = db.prepare("SELECT * FROM oauth_tokens WHERE token_hash=? AND kind='refresh'").get(rHash);
         if (!row || (row.expires && row.expires < Date.now())) { json(res, 400, { error: "invalid_grant" }); return; }
+        // refresh token rotation (RFC 9700): eskisi geçersiz kılınıp yenisi verilir —
+        // sızmış bir refresh token ikinci kullanımda invalid_grant alır ve fark edilir
+        db.prepare("DELETE FROM oauth_tokens WHERE token_hash=?").run(rHash);
         const access = issueToken(row.client_id, row.login_id, "access", 3600_000);
-        json(res, 200, { access_token: access, token_type: "Bearer", expires_in: 3600, scope: "" });
+        const refresh = issueToken(row.client_id, row.login_id, "refresh", null);
+        json(res, 200, { access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh, scope: "" });
         return;
       }
       json(res, 400, { error: "unsupported_grant_type" });
