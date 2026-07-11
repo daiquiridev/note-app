@@ -555,6 +555,10 @@ input,textarea{font:inherit;color:inherit}
 .sum-row small{color:var(--muted);font-size:12px;flex-shrink:0}
 .sum-row small.late{color:#fff;background:var(--grad-hot);border-radius:6px;padding:1px 7px;font-weight:600}
 .sum-empty{color:var(--muted);font-size:13.5px;padding:6px 10px 0}
+.backlinks:not(:empty){margin-top:32px;padding-top:16px;border-top:1px solid var(--line)}
+.backlinks .sec-label{font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:0 2px 6px}
+.note-link{color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px}
+.note-link:hover{text-decoration-style:solid}
 
 /* ── Palet (Ctrl+K) ─────────────────────────── */
 .overlay{position:fixed;inset:0;background:rgba(105,115,100,.18);backdrop-filter:blur(6px);
@@ -771,6 +775,7 @@ input,textarea{font:inherit;color:inherit}
 
 <div class="toasts" id="toasts"></div>
 <div class="slash-menu" id="slashMenu"></div>
+<div class="slash-menu" id="linkMenu"></div>
 <div class="mini-menu" id="folderMenu"></div>
 <div class="mini-menu" id="blockMenu"></div>
 
@@ -1080,17 +1085,28 @@ function openNote(id, focus) {
         <span class="meta-chip" data-savetpl title="Bu notu şablon olarak kaydet">${ICONS.copy} Şablon kaydet</span>
       </div>
       <div class="blocks" id="blocks"></div>
+      <div class="backlinks" id="backlinks"></div>
     </div>`;
   $(".page-meta [data-move]").addEventListener("click", () => moveNoteToFolder(n.id));
   $(".page-meta [data-pmove]")?.addEventListener("click", () => moveNoteToProject(n.id));
   $(".page-meta [data-savetpl]").addEventListener("click", () => saveAsTemplate(n));
   const wrap = $("#blocks");
   visibleBlocks(n).forEach(b => wrap.appendChild(blockEl(n, b)));
+  renderBacklinks(n);
   bindTitle(n);
   renderSidebar();
   if (focus === "title") $("#titleInput").focus();
   else if (focus === "content") { const first = n.blocks.find(b => b.type !== "h3"); if (first) focusBlock(first.id); }
   setRoute("/not/" + id);
+}
+function renderBacklinks(n) {
+  const el = $("#backlinks"); if (!el) return;
+  const marker = `data-note-link="${n.id}"`;
+  const sources = state.notes.filter(o => o.id !== n.id && o.blocks.some(b => (b.html || "").includes(marker)));
+  if (!sources.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="sec-label">↩ Bundan bahsedenler</div>` + sources.map(o => `
+    <div class="sum-row" data-note="${o.id}">${o.type === "meeting" ? ICONS.users : ICONS.doc}<span class="t">${esc(o.title) || "Başlıksız"}</span></div>`).join("");
+  el.querySelectorAll("[data-note]").forEach(row => row.addEventListener("click", () => openNote(row.dataset.note)));
 }
 
 function bindTitle(n) {
@@ -1293,6 +1309,11 @@ function onBlockInput(note, b, c) {
   if (txt.startsWith("/") && b.type !== "code") { openSlash(note, b, c, txt.slice(1)); }
   else closeSlash();
 
+  // [[not bağlantısı]] menüsü
+  const trig = b.type !== "code" ? findLinkTrigger(c) : null;
+  if (trig) openLinkMenu(note, b, c, trig.query, trig.start, trig.end);
+  else closeLinkMenu();
+
   // markdown kısayolları (sadece p bloklarında dönüştür)
   if (b.type === "p" || b.type === "bullet" || b.type === "num") {
     const map = [[/^#\s$/, "h1"], [/^##\s$/, "h2"], [/^###\s$/, "h3"], [/^[-*]\s$/, "bullet"],
@@ -1323,6 +1344,9 @@ function caretAtEnd(el) {
 function onBlockKey(e, note, b, c) {
   if (slash.open) {
     if (["ArrowDown", "ArrowUp", "Enter", "Escape", "Tab"].includes(e.key)) { e.preventDefault(); slashKey(e.key); return; }
+  }
+  if (link.open) {
+    if (["ArrowDown", "ArrowUp", "Enter", "Escape", "Tab"].includes(e.key)) { e.preventDefault(); linkKey(e.key); return; }
   }
   if (e.key === "Tab") {
     e.preventDefault();
@@ -1542,6 +1566,92 @@ function pickSlash(i) {
 }
 function closeSlash() { slash.open = false; $("#slashMenu").classList.remove("show"); }
 document.addEventListener("mousedown", e => { if (slash.open && !e.target.closest("#slashMenu")) closeSlash(); });
+
+/* ═══════════ [[not bağlantısı]] ═══════════ */
+const link = { open: false, note: null, block: null, el: null, sel: 0, items: [], start: 0, end: 0 };
+function findLinkTrigger(c) {
+  const s = getSelection(); if (!s.rangeCount) return null;
+  const r = s.getRangeAt(0); if (!r.collapsed) return null;
+  const pre = r.cloneRange(); pre.selectNodeContents(c); pre.setEnd(r.startContainer, r.startOffset);
+  const text = pre.toString();
+  const idx = text.lastIndexOf("[[");
+  if (idx < 0) return null;
+  const after = text.slice(idx + 2);
+  if (after.includes("]]") || after.includes("\n")) return null; // zaten kapanmış bir çift köşeli parantez
+  return { query: after, start: idx, end: text.length };
+}
+function openLinkMenu(note, b, c, query, start, end) {
+  link.open = true; link.note = note; link.block = b; link.el = c; link.sel = 0; link.start = start; link.end = end;
+  const norm = s => s.toLocaleLowerCase("tr");
+  const nq = norm(query);
+  link.items = state.notes.filter(o => o.id !== note.id && (!nq || norm(o.title || "").includes(nq))).slice(0, 8);
+  const menu = $("#linkMenu");
+  if (!link.items.length) { menu.classList.remove("show"); return; }
+  menu.innerHTML = link.items.map((o, i) => `
+    <div class="slash-item ${i === 0 ? "sel" : ""}" data-i="${i}">
+      <span class="ic">${o.type === "meeting" ? "👥" : "📄"}</span><span><b>${esc(o.title) || "Başlıksız"}</b></span>
+    </div>`).join("");
+  menu.classList.add("show");
+  const r = c.getBoundingClientRect();
+  const mh = Math.min(300, link.items.length * 44 + 10);
+  const top = r.bottom + mh > innerHeight - 12 ? r.top - mh - 4 : r.bottom + 4;
+  menu.style.left = Math.min(r.left, innerWidth - 266) + "px";
+  menu.style.top = top + "px";
+  $$("#linkMenu .slash-item").forEach(it => {
+    it.addEventListener("mousedown", e => { e.preventDefault(); pickLink(+it.dataset.i); });
+    it.addEventListener("mouseenter", () => setLinkSel(+it.dataset.i));
+  });
+}
+function setLinkSel(i) {
+  link.sel = i;
+  $$("#linkMenu .slash-item").forEach((el, j) => el.classList.toggle("sel", j === i));
+  $$("#linkMenu .slash-item")[i]?.scrollIntoView({ block: "nearest" });
+}
+function linkKey(key) {
+  if (key === "Escape") return closeLinkMenu();
+  if (key === "ArrowDown") return setLinkSel((link.sel + 1) % link.items.length);
+  if (key === "ArrowUp") return setLinkSel((link.sel - 1 + link.items.length) % link.items.length);
+  pickLink(link.sel); // Enter / Tab
+}
+function rangeFromOffsets(root, startOffset, endOffset) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node, acc = 0, startNode, startOff, endNode, endOff;
+  while ((node = walker.nextNode())) {
+    const len = node.textContent.length;
+    if (startNode === undefined && acc + len >= startOffset) { startNode = node; startOff = startOffset - acc; }
+    if (acc + len >= endOffset) { endNode = node; endOff = endOffset - acc; break; }
+    acc += len;
+  }
+  const r = document.createRange();
+  if (startNode) r.setStart(startNode, startOff); else r.setStart(root, 0);
+  if (endNode) r.setEnd(endNode, endOff); else r.setEnd(root, root.childNodes.length);
+  return r;
+}
+function pickLink(i) {
+  const item = link.items[i]; if (!item) return closeLinkMenu();
+  const { note, block, el, start, end } = link;
+  closeLinkMenu();
+  const r = rangeFromOffsets(el, start, end);
+  r.deleteContents();
+  const a = document.createElement("span");
+  a.className = "note-link"; a.dataset.noteLink = item.id; a.contentEditable = "false"; a.textContent = item.title || "Başlıksız";
+  r.insertNode(a);
+  const space = document.createTextNode(" ");
+  a.after(space);
+  const sel = getSelection(); const nr = document.createRange();
+  nr.setStartAfter(space); nr.collapse(true);
+  sel.removeAllRanges(); sel.addRange(nr);
+  block.html = el.innerHTML;
+  note.updated = Date.now();
+  deferSave();
+}
+function closeLinkMenu() { link.open = false; $("#linkMenu").classList.remove("show"); }
+document.addEventListener("mousedown", e => { if (link.open && !e.target.closest("#linkMenu")) closeLinkMenu(); });
+document.addEventListener("click", e => {
+  const a = e.target.closest("[data-note-link]"); if (!a) return;
+  const id = a.dataset.noteLink;
+  noteById(id) ? openNote(id) : toast("Bağlantı verilen not artık yok");
+});
 
 /* ═══════════ görevler ═══════════ */
 function openTaskFromSearch(id) {
@@ -2638,6 +2748,7 @@ document.addEventListener("keydown", e => {
   }
   else if (e.key === "Escape") {
     closeSlash();
+    closeLinkMenu();
     closeFolderMenu();
     closeBlockMenu();
     closeActionsModal();
