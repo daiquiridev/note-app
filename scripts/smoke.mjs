@@ -143,6 +143,28 @@ try {
   ok(s5.status === 200, "şablonlu push kabul edildi", String(s5.status));
   const d6 = await (await api("/api/data")).json();
   ok((d6.data?.templates || []).some(t => t.id === "tpl1"), "şablon sunucuda kalıcı (settings blob roundtrip)");
+
+  console.log("9) hızlı yakalama (/yakala)");
+  const yUnauth = await fetch(BASE + "/yakala?metin=deneme", { redirect: "manual" });
+  ok(yUnauth.status === 302 && yUnauth.headers.get("location").startsWith("/login?return="), "oturumsuz /yakala → login'e yönleniyor (metni koruyarak)", yUnauth.headers.get("location"));
+  ok(decodeURIComponent(yUnauth.headers.get("location")).includes("metin=deneme"), "return parametresi ?metin=... sorgu dizesini koruyor");
+
+  const y1 = await fetch(BASE + "/yakala?metin=" + encodeURIComponent("ilk yakalama notu"), { headers: { Cookie: cookieHeader() }, redirect: "manual" });
+  ok(y1.status === 302 && /^\/not\//.test(y1.headers.get("location") || ""), "oturumlu /yakala → nota yönleniyor", y1.headers.get("location"));
+  const dailyId1 = y1.headers.get("location").split("/not/")[1];
+  const y2 = await fetch(BASE + "/yakala?metin=" + encodeURIComponent("ikinci yakalama, aynı güne eklenmeli"), { headers: { Cookie: cookieHeader() }, redirect: "manual" });
+  const dailyId2 = y2.headers.get("location").split("/not/")[1];
+  ok(dailyId1 === dailyId2, "aynı gün içinde ikinci yakalama AYNI günlük nota ekleniyor (kopya oluşturmuyor)");
+  const d7 = await (await api("/api/data")).json();
+  const dailyNote = (d7.data?.notes || []).find(n => n.id === dailyId1);
+  ok(dailyNote && dailyNote.blocks.some(b => b.html.includes("ilk yakalama notu")) && dailyNote.blocks.some(b => b.html.includes("ikinci yakalama")), "her iki metin de günlük notta");
+
+  const yNew = await fetch(BASE + "/yakala?metin=" + encodeURIComponent("ayrı bir not olsun") + "&hedef=yeni", { headers: { Cookie: cookieHeader() }, redirect: "manual" });
+  const newNoteId = yNew.headers.get("location")?.split("/not/")[1];
+  ok(newNoteId && newNoteId !== dailyId1, "hedef=yeni farklı, yeni bir not oluşturuyor");
+
+  const yEmpty = await fetch(BASE + "/yakala?metin=", { headers: { Cookie: cookieHeader() } });
+  ok(yEmpty.status === 400, "boş metin → 400", String(yEmpty.status));
 } catch (e) {
   console.error("beklenmeyen hata:", e);
   failed++;

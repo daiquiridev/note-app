@@ -1215,6 +1215,54 @@ http.createServer(async (req, res) => {
       return;
     }
 
+    if (p === "/yakala" && (req.method === "GET" || req.method === "POST")) {
+      const user = authedUser(req);
+      if (!user) { res.writeHead(302, { Location: "/login?return=" + encodeURIComponent(p + url.search) }); res.end(); return; }
+      let metin, hedef;
+      if (req.method === "GET") {
+        metin = url.searchParams.get("metin") || "";
+        hedef = url.searchParams.get("hedef") === "yeni" ? "yeni" : "gunluk";
+      } else {
+        let body = {};
+        try { body = JSON.parse(await readBody(req)); } catch {}
+        metin = String(body.metin || "");
+        hedef = body.hedef === "yeni" ? "yeni" : "gunluk";
+      }
+      metin = metin.trim().slice(0, 2000);
+      if (!metin) { json(res, 400, { error: "Boş metin" }); return; }
+
+      let noteId;
+      if (hedef === "yeni") {
+        noteId = crypto.randomUUID();
+        const n = { id: noteId, title: metin.slice(0, 60), type: "note", pinned: false, created: Date.now(), updated: Date.now(), blocks: textToBlocks(metin) };
+        upsertItem(user.id, "note", noteId, n, n.updated);
+      } else {
+        const title = "Günlük — " + new Date().toLocaleDateString("tr-TR", { day: "numeric", month: "long", year: "numeric" });
+        const existing = listItems(user.id, "note").find(n => n.title === title);
+        if (existing) {
+          noteId = existing.id;
+          existing.blocks.push({ id: crypto.randomUUID(), type: "p", html: escHtml(metin) });
+          existing.updated = Date.now();
+          upsertItem(user.id, "note", noteId, existing, existing.updated);
+        } else {
+          noteId = crypto.randomUUID();
+          const n = {
+            id: noteId, title, type: "note", pinned: false, created: Date.now(), updated: Date.now(),
+            blocks: [
+              { id: crypto.randomUUID(), type: "h3", html: "Notlar" },
+              { id: crypto.randomUUID(), type: "p", html: escHtml(metin) },
+              { id: crypto.randomUUID(), type: "h3", html: "Yapılacaklar" },
+              { id: crypto.randomUUID(), type: "todo", html: "", checked: false },
+            ],
+          };
+          upsertItem(user.id, "note", noteId, n, n.updated);
+        }
+      }
+      res.writeHead(302, { Location: "/not/" + noteId });
+      res.end();
+      return;
+    }
+
     if (p === "/" || /^\/not\/[a-zA-Z0-9_-]+$/.test(p) || p === "/gorevler" || p === "/takvim") {
       const user = authedUser(req);
       if (!user) { res.writeHead(302, { Location: "/login?return=" + encodeURIComponent(p) }); res.end(); return; }

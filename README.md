@@ -13,6 +13,9 @@ Notion-tarzı, **sıfır npm bağımlılıklı** not & görev uygulaması. Tek N
   (Cloudflare Worker → Workers AI Whisper)
 - Çevrimdışı çalışır (localStorage); sunucuyla öğe-bazlı merge senkronizasyonu
 - MCP sunucusu (`/mcp`): Claude'dan not/görev okuma-yazma; statik API key veya OAuth 2.1 + PKCE
+- Tam metin arama (SQLite FTS5): notlar, görev açıklamaları ve klasörler Ctrl+K'dan aranabilir
+- AI özeti: tek tıkla not özeti + aksiyon listesi (Workers AI LLM, aynı STT Worker üzerinden)
+- Günlük not + şablonlar; hızlı yakalama (`/yakala`) ile telefondan/tarayıcıdan tek adımda not düşme
 
 ## Çalıştırma
 
@@ -56,6 +59,23 @@ ssh root@<sunucu> "cd /opt/defter && docker compose up -d --build"
 ```
 
 Şema değişikliğinden önce `/data/defter.db*` (db + wal + shm) yedeği alın.
+
+## Hızlı yakalama (`/yakala`)
+
+`GET|POST /yakala?metin=...&hedef=gunluk|yeni` — oturum korumalı. `hedef=gunluk` (varsayılan)
+bugünün "Günlük — <tarih>" notuna metni ekler (yoksa oluşturur); `hedef=yeni` ayrı bir not açar.
+Oturum yoksa `/login?return=...` ile giriş sonrası otomatik tamamlanır. Yanıt: notun sayfasına 302.
+
+**iOS Kısayolu:** Kısayollar uygulamasında yeni kısayol → "Metin İste" → "URL"
+(`https://notes.daiquiri.dev/yakala?metin=[Sağlanan Girdi]`, metni URL-kodlaması otomatik) →
+"URL'yi Aç". Ana ekrana ekleyip paylaşım sayfasına da eklenebilir (Kısayollar → ⋯ → "Paylaşım
+Sayfasında Göster").
+
+**Bookmarklet (masaüstü tarayıcı):** Yer imi çubuğuna sürüklenecek bir link olarak kaydet:
+```
+javascript:location.href='https://notes.daiquiri.dev/yakala?metin='+encodeURIComponent(window.getSelection().toString()||document.title+' '+location.href)
+```
+Seçili metin varsa onu, yoksa sayfa başlığı + URL'ini günlük nota ekler.
 
 ## STT Worker
 
