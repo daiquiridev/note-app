@@ -449,6 +449,20 @@ input,textarea{font:inherit;color:inherit}
 .account-box h3{font-size:15px;margin-bottom:2px}
 .account-box .sub{font-size:12px;color:var(--muted);margin-bottom:14px}
 .account-box .divider{height:1px;background:var(--line);margin:16px 0}
+
+/* ── AI özeti aksiyon onayı ─────────────────────────── */
+.actions-box{width:420px;max-width:92vw;background:var(--glass3);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);padding:18px 20px;max-height:80vh;overflow-y:auto}
+.actions-box h3{font-size:15px;margin-bottom:2px}
+.actions-box .sub{font-size:12px;color:var(--muted);margin-bottom:14px}
+.actions-box .arow{display:flex;align-items:flex-start;gap:9px;padding:7px 4px;border-radius:8px;cursor:pointer}
+.actions-box .arow:hover{background:var(--hover)}
+.actions-box .arow input{margin-top:3px;flex-shrink:0}
+.actions-box .arow span{font-size:13.5px;line-height:1.4}
+.actions-box .abtns{display:flex;gap:8px;margin-top:14px}
+.actions-box .abtns button{flex:1;padding:8px 0;border-radius:9px;font-weight:600;font-size:13.5px}
+.actions-box .abtns .primary{background:var(--btn);color:var(--btn-text)}
+.actions-box .abtns .ghost{background:var(--glass2);border:1px solid var(--border)}
 .account-list{display:flex;flex-direction:column;gap:2px;margin-bottom:8px}
 .account-row{display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:10px;cursor:pointer}
 .account-row:hover{background:var(--hover)}
@@ -639,6 +653,7 @@ input,textarea{font:inherit;color:inherit}
       <button class="icon-btn" id="btnPomo" title="Pomodoro zamanlayıcı"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
       <button class="icon-btn" id="btnMic" title="Sesli not (Türkçe yazıya döker)"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0014 0M12 17v4"/></svg></button>
       <button class="icon-btn" id="btnMeetSTT" title="Toplantı kaydı (sen + sistem sesi ayrı ayrı yazıya dökülür)"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg></button>
+      <button class="icon-btn" id="btnSummarize" title="AI özeti çıkar"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></button>
       <button class="icon-btn" id="btnPin" title="Sabitle"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 3h6l1 7 3 2H5l3-2z"/></svg></button>
       <button class="icon-btn" id="btnDelete" title="Notu sil"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg></button>
     </div>
@@ -676,6 +691,18 @@ input,textarea{font:inherit;color:inherit}
 
 <div class="overlay" id="promptOverlay">
   <div class="prompt-box"><input id="promptField" type="text" autocomplete="off"></div>
+</div>
+
+<div class="overlay" id="actionsOverlay">
+  <div class="actions-box">
+    <h3>Aksiyonlar bulundu</h3>
+    <div class="sub">Görevlere eklemek istediklerini seç</div>
+    <div id="actionsList"></div>
+    <div class="abtns">
+      <button class="ghost" id="actionsSkip">Ekleme</button>
+      <button class="primary" id="actionsAdd">Seçilenleri ekle</button>
+    </div>
+  </div>
 </div>
 
 <div class="overlay" id="keysOverlay">
@@ -975,7 +1002,7 @@ function openNote(id, focus) {
   stopMic(); stopMeetSTT();
   const n = noteById(id); if (!n) return showWelcome();
   view = { mode: "note", noteId: id };
-  ["btnMic", "btnMeetSTT", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "");
+  ["btnMic", "btnMeetSTT", "btnSummarize", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "");
   $("#btnPin").classList.toggle("on", !!n.pinned);
   const fld = state.folders.find(f => f.id === n.folderId);
   $("#content").innerHTML = `
@@ -1454,7 +1481,7 @@ document.addEventListener("mousedown", e => { if (slash.open && !e.target.closes
 function openTasks() {
   stopMic(); stopMeetSTT();
   view = { mode: "tasks", noteId: null };
-  ["btnMic", "btnMeetSTT", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
+  ["btnMic", "btnMeetSTT", "btnSummarize", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
   const open = state.tasks.filter(t => !t.done);
   const done = state.tasks.filter(t => t.done);
   const lateCnt  = open.filter(t => t.due && new Date(t.due).getTime() < Date.now()).length;
@@ -1664,7 +1691,7 @@ let calCur = null, calSel = null;
 function openCal() {
   stopMic(); stopMeetSTT();
   view = { mode: "cal", noteId: null };
-  ["btnMic", "btnMeetSTT", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
+  ["btnMic", "btnMeetSTT", "btnSummarize", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
   const now = new Date();
   if (!calCur) {
     calCur = { y: now.getFullYear(), m: now.getMonth() };
@@ -1910,6 +1937,72 @@ function stopMeetSTT(reason) {
   toast(reason ? "Toplantı kaydı durdu — " + reason : "Toplantı kaydı durduruldu");
 }
 $("#btnMeetSTT").onclick = () => meetRecs ? stopMeetSTT() : startMeetSTT();
+/* ═══════════ AI özeti + aksiyon çıkarma ═══════════ */
+function noteToPlainText(n) {
+  return (n.blocks || []).map(b => {
+    const t = plain(b.html);
+    if (b.type === "todo") return (b.checked ? "[x] " : "[ ] ") + t;
+    if (b.type === "bullet") return "- " + t;
+    return t;
+  }).join("\n");
+}
+let summarizing = false;
+async function startSummarize() {
+  if (view.mode !== "note" || summarizing) return;
+  const n = noteById(view.noteId); if (!n) return;
+  const text = noteToPlainText(n).trim();
+  if (text.length < 20) { toast("Özetlemek için not çok kısa"); return; }
+  summarizing = true;
+  $("#btnSummarize").classList.add("on");
+  try {
+    const r = await fetch("/api/summarize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    const j = await r.json();
+    if (!r.ok || j.error) { toast(j.error || "Özetleme başarısız"); return; }
+    applySummary(n, j.text || "");
+  } catch { toast("Özetleme servisine ulaşılamadı"); }
+  finally { summarizing = false; $("#btnSummarize").classList.remove("on"); }
+}
+$("#btnSummarize").onclick = startSummarize;
+
+function applySummary(n, raw) {
+  const idx = raw.indexOf("AKSIYONLAR:");
+  const summaryPart = (idx >= 0 ? raw.slice(0, idx) : raw).trim();
+  const actionsPart = idx >= 0 ? raw.slice(idx + "AKSIYONLAR:".length) : "";
+  const actionLines = actionsPart.split("\n").map(l => l.replace(/^[-*]\s*\[\s*\]\s*/, "").trim()).filter(Boolean);
+  const summaryLines = summaryPart.split("\n").map(l => l.replace(/^[-*]\s*/, "").trim()).filter(Boolean);
+  if (!summaryLines.length) { toast("Özet boş döndü"); return; }
+
+  const dateStr = new Date().toLocaleDateString("tr-TR", { day: "numeric", month: "long" });
+  const toggleBlock = { id: uid(), type: "toggle", html: "AI Özeti — " + dateStr, collapsed: false };
+  const childBlocks = summaryLines.map(line => ({ id: uid(), type: "bullet", html: esc(line), indent: 1 }));
+  n.blocks.unshift(toggleBlock, ...childBlocks);
+  n.updated = Date.now();
+  rerenderBlocks(n);
+  deferSave();
+  toast("Özet eklendi");
+
+  if (actionLines.length) openActionsModal(actionLines);
+}
+
+let pendingActions = [];
+function openActionsModal(lines) {
+  pendingActions = lines;
+  $("#actionsList").innerHTML = lines.map((l, i) => `
+    <label class="arow"><input type="checkbox" checked data-ai="${i}"><span>${esc(l)}</span></label>`).join("");
+  $("#actionsOverlay").classList.add("show");
+}
+function closeActionsModal() { $("#actionsOverlay").classList.remove("show"); pendingActions = []; }
+$("#actionsSkip").onclick = closeActionsModal;
+$("#actionsAdd").onclick = () => {
+  const checked = [...$("#actionsList").querySelectorAll("input[data-ai]:checked")].map(el => pendingActions[+el.dataset.ai]);
+  checked.forEach(text => {
+    state.tasks.push({ id: uid(), text, desc: "", done: false, due: null, remind: false, notified: false, created: Date.now(), updated: Date.now() });
+  });
+  if (checked.length) { save(); toast(checked.length + " görev eklendi"); }
+  closeActionsModal();
+};
+$("#actionsOverlay").addEventListener("click", e => { if (e.target.id === "actionsOverlay") closeActionsModal(); });
+
 function appendLabeledTranscript(label, text) {
   if (!text) return;
   const n = noteById(view.noteId); if (!n) return;
@@ -2032,7 +2125,7 @@ $("#btnDelete").onclick = () => { if (view.noteId) deleteNote(view.noteId); };
 /* ═══════════ özet sayfası ═══════════ */
 function showWelcome() {
   view = { mode: "welcome", noteId: null };
-  ["btnMic", "btnMeetSTT", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
+  ["btnMic", "btnMeetSTT", "btnSummarize", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
   const hour = new Date().getHours();
   const greet = hour < 6 ? "İyi geceler" : hour < 12 ? "Günaydın" : hour < 18 ? "İyi günler" : "İyi akşamlar";
   const open = state.tasks.filter(t => !t.done);
@@ -2435,6 +2528,7 @@ document.addEventListener("keydown", e => {
     closeSlash();
     closeFolderMenu();
     closeBlockMenu();
+    closeActionsModal();
     if (pal.open) closePalette();
     closeAccountModal();
     $("#pomoPop").classList.remove("show");

@@ -104,6 +104,12 @@ try {
   ok(sttNoAuth.status === 401, "oturumsuz /api/stt → 401", String(sttNoAuth.status));
   const sttAuthed = await api("/api/stt?lang=tr", { method: "POST", body: "x", headers: { "Content-Type": "application/octet-stream" } });
   ok(sttAuthed.status === 500, "oturumlu /api/stt, worker yapılandırılmamışken → 500 (401 değil)", String(sttAuthed.status));
+  const sumNoAuth = await fetch(BASE + "/api/summarize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "x" }) });
+  ok(sumNoAuth.status === 401, "oturumsuz /api/summarize → 401", String(sumNoAuth.status));
+  const sumAuthed = await api("/api/summarize", { method: "POST", body: JSON.stringify({ text: "x" }) });
+  ok(sumAuthed.status === 500, "oturumlu /api/summarize, worker yapılandırılmamışken → 500 (401 değil)", String(sumAuthed.status));
+  const sumEmpty = await api("/api/summarize", { method: "POST", body: JSON.stringify({ text: "" }) });
+  ok(sumEmpty.status === 400, "boş metin → 400", String(sumEmpty.status));
 } catch (e) {
   console.error("beklenmeyen hata:", e);
   failed++;

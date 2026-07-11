@@ -1142,6 +1142,24 @@ http.createServer(async (req, res) => {
         return;
       }
 
+      if (p === "/api/summarize" && req.method === "POST") {
+        let body;
+        try { body = JSON.parse(await readBody(req)); } catch { json(res, 400, { error: "Geçersiz JSON" }); return; }
+        const text = String(body?.text || "").trim();
+        if (!text) { json(res, 400, { error: "Boş metin" }); return; }
+        if (!STT_WORKER_URL || !STT_WORKER_SECRET) { json(res, 500, { error: "Özetleme yapılandırılmamış" }); return; }
+        try {
+          const r = await fetch(STT_WORKER_URL + "/summarize", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + STT_WORKER_SECRET, "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+          });
+          const j = await r.json();
+          json(res, r.status, j);
+        } catch (e) { json(res, 502, { error: "Özetleme servisine ulaşılamadı" }); }
+        return;
+      }
+
       json(res, 404, { error: "Yok" });
       return;
     }
