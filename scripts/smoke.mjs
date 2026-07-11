@@ -110,6 +110,30 @@ try {
   ok(sumAuthed.status === 500, "oturumlu /api/summarize, worker yapılandırılmamışken → 500 (401 değil)", String(sumAuthed.status));
   const sumEmpty = await api("/api/summarize", { method: "POST", body: JSON.stringify({ text: "" }) });
   ok(sumEmpty.status === 400, "boş metin → 400", String(sumEmpty.status));
+
+  console.log("7) tam metin arama (FTS5)");
+  jar.active = P1;
+  const distinctNote = { id: "n4", title: "Kadıköy toplantı notu", updated: Date.now(),
+    blocks: [{ id: "n4b", type: "p", html: "zeplinkabagi projesiyle ilgili bütçe kararı" }] };
+  const cur = await (await api("/api/data")).json();          // tam state'i al —
+  const others = (cur.data?.notes || []).filter(n => n.id !== "n4"); // yalnızca yeni notu göndermek
+  const s4 = await sync(cur.seq, [...others, distinctNote]);         // diğerlerini tombstone'lardı
+  const search = async q => (await (await api("/api/search?q=" + encodeURIComponent(q))).json()).results;
+  const r1 = await search("zeplinkabagi");
+  ok(r1.some(x => x.id === "n4"), "içerikte geçen benzersiz kelime notu buluyor");
+  const r1p = await search("zeplinka"); // prefix — tam kelime değil
+  ok(r1p.some(x => x.id === "n4"), "prefix arama da (tam kelime değil) buluyor");
+  await sync(s4.seq, others); // n4'ü sil, diğerleri kalsın
+  const r2 = await search("zeplinkabagi");
+  ok(!r2.some(x => x.id === "n4"), "silinen not arama sonuçlarında yok");
+  jar.active = P2;
+  const r3 = await search("zeplinkabagi");
+  ok(r3.length === 0, "diğer projenin verisi arama sonuçlarına sızmıyor");
+  jar.active = P1;
+  for (const weird of ['"', "*", "(", "AND OR NOT"]) {
+    const wr = await api("/api/search?q=" + encodeURIComponent(weird));
+    ok(wr.status === 200, `arama '${weird}' ile 500 vermiyor`, String(wr.status));
+  }
 } catch (e) {
   console.error("beklenmeyen hata:", e);
   failed++;

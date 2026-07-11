@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS items(
   PRIMARY KEY(user_id, kind, id)
 );
 CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id, deleted);
+CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
+  user_id UNINDEXED, kind UNINDEXED, id UNINDEXED, title, body,
+  tokenize='unicode61 remove_diacritics 2'
+);
 CREATE TABLE IF NOT EXISTS meta(
   user_id TEXT PRIMARY KEY,
   seq INTEGER NOT NULL DEFAULT 0
@@ -162,6 +166,30 @@ function migrate() {
   }
 }
 
+/* ── tam metin arama (FTS5) — items ile aynı anda tutulan, bağımsız türev tablo ── */
+function ftsTextFor(kind, obj) {
+  if (kind === "note") return { title: obj.title || "", body: noteToText(obj) };
+  if (kind === "task") return { title: obj.text || "", body: obj.desc || "" };
+  if (kind === "folder") return { title: obj.name || "", body: "" };
+  return null; // settings vb. aranmaz
+}
+function indexFts(uid, kind, id, obj) {
+  db.prepare("DELETE FROM items_fts WHERE user_id=? AND kind=? AND id=?").run(uid, kind, id);
+  const t = ftsTextFor(kind, obj);
+  if (!t) return;
+  db.prepare("INSERT INTO items_fts(user_id,kind,id,title,body) VALUES(?,?,?,?,?)").run(uid, kind, id, t.title, t.body);
+}
+function deindexFts(uid, kind, id) {
+  db.prepare("DELETE FROM items_fts WHERE user_id=? AND kind=? AND id=?").run(uid, kind, id);
+}
+function backfillFts() {
+  const done = db.prepare("SELECT COUNT(*) c FROM items_fts").get().c;
+  if (done > 0) return; // yalnızca ilk kurulumda — sonrası write noktalarında canlı tutuluyor
+  const rows = db.prepare("SELECT user_id,kind,id,json FROM items WHERE deleted=0 AND kind IN ('note','task','folder')").all();
+  for (const r of rows) { try { indexFts(r.user_id, r.kind, r.id, JSON.parse(r.json)); } catch {} }
+  if (rows.length) console.log("fts: " + rows.length + " öğe geriye dönük indekslendi");
+}
+
 /* ── senkron çekirdeği ── */
 function collectClientItems(data) {
   const out = [];
@@ -190,14 +218,14 @@ function syncUser(uid, baseSeq, data) {
       const key = it.kind + ":" + it.id;
       clientKeys.add(key);
       const row = rows.get(key);
-      if (!row || it.updated > row.updated) up.run(uid, it.kind, it.id, it.updated, ++seq, JSON.stringify(it.json));
+      if (!row || it.updated > row.updated) { up.run(uid, it.kind, it.id, it.updated, ++seq, JSON.stringify(it.json)); indexFts(uid, it.kind, it.id, it.json); }
       else if (row.deleted || row.updated > it.updated) changed = true;   // sunucu tarafı daha yeni → istemci güncellenmeli
     }
     const del = db.prepare("UPDATE items SET deleted=1, json=NULL, updated=?, seq=? WHERE user_id=? AND kind=? AND id=?");
     const now = Date.now();
     for (const [key, row] of rows) {
       if (row.deleted || clientKeys.has(key) || row.kind === "settings") continue;
-      if (row.seq <= baseSeq) del.run(now, ++seq, uid, row.kind, row.id); // istemci biliyordu ve silmiş → tombstone
+      if (row.seq <= baseSeq) { del.run(now, ++seq, uid, row.kind, row.id); deindexFts(uid, row.kind, row.id); } // istemci biliyordu ve silmiş → tombstone
       else changed = true;                                               // istemcinin görmediği yeni öğe
     }
     db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(uid, seq);
@@ -230,6 +258,7 @@ function upsertItem(uid, kind, id, obj, updated) {
     db.prepare(`INSERT INTO items(user_id,kind,id,updated,deleted,seq,json) VALUES(?,?,?,?,0,?,?)
       ON CONFLICT(user_id,kind,id) DO UPDATE SET updated=excluded.updated,deleted=0,seq=excluded.seq,json=excluded.json`)
       .run(uid, kind, id, updated, seq, JSON.stringify(obj));
+    indexFts(uid, kind, id, obj);
     db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(uid, seq);
     db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }
@@ -241,7 +270,7 @@ function deleteItem(uid, kind, id) {
     seq++;
     const r = db.prepare("UPDATE items SET deleted=1, json=NULL, updated=?, seq=? WHERE user_id=? AND kind=? AND id=? AND deleted=0")
       .run(Date.now(), seq, uid, kind, id);
-    if (r.changes) db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(uid, seq);
+    if (r.changes) { db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(uid, seq); deindexFts(uid, kind, id); }
     db.exec("COMMIT");
     return !!r.changes;
   } catch (e) { db.exec("ROLLBACK"); throw e; }
@@ -257,8 +286,8 @@ function moveItems(fromUid, toUid, moves) {
     const ins = db.prepare(`INSERT INTO items(user_id,kind,id,updated,deleted,seq,json) VALUES(?,?,?,?,0,?,?)
       ON CONFLICT(user_id,kind,id) DO UPDATE SET updated=excluded.updated,deleted=0,seq=excluded.seq,json=excluded.json`);
     for (const m of moves) {
-      fromSeq++; del.run(now, fromSeq, fromUid, m.kind, m.id);
-      toSeq++; ins.run(toUid, m.kind, m.id, now, toSeq, JSON.stringify(m.obj));
+      fromSeq++; del.run(now, fromSeq, fromUid, m.kind, m.id); deindexFts(fromUid, m.kind, m.id);
+      toSeq++; ins.run(toUid, m.kind, m.id, now, toSeq, JSON.stringify(m.obj)); indexFts(toUid, m.kind, m.id, m.obj);
     }
     db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(fromUid, fromSeq);
     db.prepare("INSERT INTO meta(user_id,seq) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seq=excluded.seq").run(toUid, toSeq);
@@ -513,6 +542,7 @@ document.getElementById("deny").onclick = () => decide(false);
 }
 
 migrate();
+backfillFts();
 
 /* ── komut satırı yönetimi: node server.js user-add|user-pass <email> <parola> ── */
 if (process.argv[2] === "user-add" || process.argv[2] === "user-pass") {
@@ -1083,6 +1113,27 @@ http.createServer(async (req, res) => {
 
       if (p === "/api/data" && req.method === "GET") {
         json(res, 200, { seq: userSeq(user.id), data: buildState(user.id) });
+        return;
+      }
+
+      if (p === "/api/search" && req.method === "GET") {
+        const q = (url.searchParams.get("q") || "").trim();
+        if (!q) { json(res, 200, { results: [] }); return; }
+        // her kelimeyi ayrı ayrı tırnaklayıp (FTS5 operatörlerinden — AND/OR/NOT, *, parantez —
+        // bağımsız kılar, 500 üretmez) sonuna * ekleyerek prefix aramaya çeviriyoruz: kullanıcı
+        // "essiztoken" yazınca "essiztokenaciklamasi" gibi tam kelimeleri de bulabilsin diye.
+        // Kelimeler arasında FTS5'in varsayılan (örtük AND) davranışı geçerli.
+        const words = q.split(/\s+/).filter(Boolean).slice(0, 8);
+        if (!words.length) { json(res, 200, { results: [] }); return; }
+        const phrase = words.map(w => '"' + w.replace(/"/g, '""') + '"*').join(" ");
+        try {
+          const rows = db.prepare(`
+            SELECT kind, id, title, snippet(items_fts, 4, '<b>', '</b>', '…', 12) AS snip
+            FROM items_fts WHERE user_id=? AND items_fts MATCH ?
+            ORDER BY rank LIMIT 20
+          `).all(user.id, phrase);
+          json(res, 200, { results: rows });
+        } catch (e) { json(res, 200, { results: [] }); }
         return;
       }
 

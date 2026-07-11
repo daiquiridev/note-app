@@ -509,6 +509,7 @@ input,textarea{font:inherit;color:inherit}
   background:var(--glass);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
   border:1px solid var(--line);margin-bottom:7px;
   transition:opacity .2s, transform .12s, box-shadow .12s}
+.task.flash{box-shadow:0 0 0 2px var(--accent)}
 .task:hover{transform:translateY(-1px);box-shadow:0 10px 26px rgba(110,120,105,.12)}
 .task .tk-box{width:17px;height:17px;flex-shrink:0;appearance:none;border:1.5px solid var(--muted);
   border-radius:50%;cursor:pointer;display:grid;place-items:center;transition:background .12s,border-color .12s}
@@ -573,6 +574,7 @@ input,textarea{font:inherit;color:inherit}
 .pal-item .t{flex:1;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pal-item .t small{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pal-item .k{font-size:11px;color:var(--accent);border:1px solid var(--accent-soft);background:var(--accent-soft);border-radius:5px;padding:1px 7px;font-weight:600}
+.pal-section{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;padding:10px 10px 4px}
 .pal-empty{padding:24px;text-align:center;color:var(--muted);font-size:13.5px}
 
 /* ── Bildirimler ─────────────────────────────── */
@@ -1478,6 +1480,14 @@ function closeSlash() { slash.open = false; $("#slashMenu").classList.remove("sh
 document.addEventListener("mousedown", e => { if (slash.open && !e.target.closest("#slashMenu")) closeSlash(); });
 
 /* ═══════════ görevler ═══════════ */
+function openTaskFromSearch(id) {
+  openTasks();
+  const el = document.querySelector(`.task[data-task="${id}"]`);
+  if (!el) return;
+  el.scrollIntoView({ block: "center" });
+  el.classList.add("flash");
+  setTimeout(() => el.classList.remove("flash"), 1500);
+}
 function openTasks() {
   stopMic(); stopMeetSTT();
   view = { mode: "tasks", noteId: null };
@@ -2438,17 +2448,48 @@ function renderPalette(q) {
       icon: n.type === "meeting" ? ICONS.users : ICONS.doc,
       label: n.title || "Başlıksız",
       sub: plain(n.blocks.map(b => b.html).join(" ")).slice(0, 70),
-      run: () => openNote(n.id), kind: "note"
+      run: () => openNote(n.id), kind: "note", noteId: n.id
     }))
   ];
   paintPalette();
+  schedulePaletteSearch(q.trim());
+}
+/* içerikte geçenler: yerel başlık eşleşmeleri anında gelir, sunucudaki tam metin araması
+   300ms debounce ile ardından ekleniyor — mevcut sonuçları geciktirmeden zenginleştiriyor */
+let paletteSearchTimer = null, paletteSearchSeq = 0;
+function schedulePaletteSearch(q) {
+  clearTimeout(paletteSearchTimer);
+  if (!CLOUD || q.length < 2) return;
+  const mySeq = ++paletteSearchSeq;
+  paletteSearchTimer = setTimeout(async () => {
+    try {
+      const r = await fetch("/api/search?q=" + encodeURIComponent(q));
+      if (!r.ok || mySeq !== paletteSearchSeq || !pal.open || pal.custom) return;
+      const { results } = await r.json();
+      const known = new Set(pal.items.filter(it => it.kind === "note").map(it => it.noteId));
+      const runFor = res => {
+        if (res.kind === "task") return () => openTaskFromSearch(res.id);
+        if (res.kind === "folder") return () => { const f = state.folders.find(x => x.id === res.id); if (f) toggleFold(f.id); renderSidebar(); toast(f ? "Klasör: " + f.name : "Klasör bulunamadı"); };
+        return () => openNote(res.id);
+      };
+      const iconFor = res => res.kind === "task" ? ICONS.check : res.kind === "folder" ? ICONS.folder : ICONS.doc;
+      const extra = (results || []).filter(res => !(res.kind === "note" && known.has(res.id))).map(res => ({
+        icon: iconFor(res), label: res.title || "Başlıksız", sub: res.snip.replace(/<\/?b>/g, ""),
+        run: runFor(res), kind: "search", noteId: res.id,
+      }));
+      if (extra.length) { pal.items = [...pal.items, ...extra]; paintPalette(); }
+    } catch {}
+  }, 300);
 }
 function paintPalette() {
-  $("#palResults").innerHTML = pal.items.length ? pal.items.map((it, i) => `
+  $("#palResults").innerHTML = pal.items.length ? pal.items.map((it, i) => {
+    const header = it.kind === "search" && pal.items[i - 1]?.kind !== "search" ? '<div class="pal-section">İçerikte geçenler</div>' : "";
+    return header + `
     <div class="pal-item ${i === pal.sel ? "sel" : ""}" data-i="${i}">
       ${it.icon}<span class="t">${esc(it.label)}${it.sub ? `<small>${esc(it.sub)}</small>` : ""}</span>
       ${it.kind === "action" ? '<span class="k">komut</span>' : ""}
-    </div>`).join("") : `<div class="pal-empty">Sonuç bulunamadı.</div>`;
+    </div>`;
+  }).join("") : `<div class="pal-empty">Sonuç bulunamadı.</div>`;
   $$("#palResults .pal-item").forEach(el => {
     el.addEventListener("mousedown", e => { e.preventDefault(); pal.pick(+el.dataset.i); });
     el.addEventListener("mouseenter", () => { pal.sel = +el.dataset.i; hlPal(); });
