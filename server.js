@@ -23,6 +23,9 @@ const MAIL_FROM = process.env.MAIL_FROM || "defter <defter@m.daiquiri.dev>";
 const APP_URL = process.env.APP_URL || "https://defter.daiquiri.dev";
 const STT_WORKER_URL = process.env.STT_WORKER_URL || "";
 const STT_WORKER_SECRET = process.env.STT_WORKER_SECRET || "";
+const VAPID_PUBLIC = process.env.VAPID_PUBLIC || "";
+const VAPID_PRIVATE_B64 = process.env.VAPID_PRIVATE || "";
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:defter@daiquiri.dev";
 
 if (!SECRET) { console.error("SECRET ortam değişkeni gerekli"); process.exit(1); }
 
@@ -105,6 +108,13 @@ CREATE TABLE IF NOT EXISTS oauth_tokens(
   login_id TEXT NOT NULL,
   kind TEXT NOT NULL,
   expires INTEGER,
+  created INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS push_subs(
+  endpoint TEXT PRIMARY KEY,
+  login_id TEXT NOT NULL,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
   created INTEGER NOT NULL
 );`);
 /* eski kurulumlardan yükseltme: yeni kolonlar yoksa ekle */
@@ -484,6 +494,55 @@ function cleanupOauth() {
   db.prepare("DELETE FROM password_resets WHERE used=1 OR expires < ?").run(now);
 }
 cleanupOauth(); // açılışta bir kez; sonrasında her /token isteğinde
+
+/* ── Web Push (VAPID) — payload'sız: push yalnızca "uyandırma", istemci/SW
+   /api/reminders/pending'i çekip bildirimi kendi gösterir. Şifreleme (RFC 8291)
+   yalnızca payload taşıyan push'larda zorunlu; boş gövdede gerekmiyor. ── */
+let vapidKey = null;
+if (VAPID_PRIVATE_B64) {
+  try { vapidKey = crypto.createPrivateKey({ key: Buffer.from(VAPID_PRIVATE_B64, "base64"), format: "der", type: "pkcs8" }); }
+  catch (e) { console.error("VAPID_PRIVATE geçersiz:", e.message); }
+}
+const b64url = buf => Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+function vapidJWT(audience) {
+  const header = b64url(JSON.stringify({ typ: "JWT", alg: "ES256" }));
+  const payload = b64url(JSON.stringify({ aud: audience, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: VAPID_SUBJECT }));
+  const signingInput = header + "." + payload;
+  const sig = crypto.sign("sha256", Buffer.from(signingInput), { key: vapidKey, dsaEncoding: "ieee-p1363" });
+  return signingInput + "." + b64url(sig);
+}
+async function sendPush(sub) {
+  const audience = new URL(sub.endpoint).origin;
+  const jwt = vapidJWT(audience);
+  const r = await fetch(sub.endpoint, {
+    method: "POST",
+    headers: { Authorization: `vapid t=${jwt}, k=${VAPID_PUBLIC}`, TTL: "60", "Content-Length": "0" },
+  });
+  if (r.status === 404 || r.status === 410) db.prepare("DELETE FROM push_subs WHERE endpoint=?").run(sub.endpoint);
+  return r.status;
+}
+/* ── sunucu tarafı hatırlatıcı motoru: vadesi gelen görevler için push gönderir ──
+   İstemci-içi hatırlatıcı (uygulama açıkken) ayrıca çalışmaya devam eder; bu yalnızca
+   uygulama kapalıyken/sekme kapalıyken bildirim gelmesini sağlar. */
+function scanReminders() {
+  if (!vapidKey || !VAPID_PUBLIC) return;
+  const now = Date.now();
+  const rows = db.prepare("SELECT user_id,id,json FROM items WHERE kind='task' AND deleted=0").all();
+  for (const row of rows) {
+    let t; try { t = JSON.parse(row.json); } catch { continue; }
+    if (t.done || !t.remind || t.notified || !t.due) continue;
+    if (new Date(t.due).getTime() > now) continue;
+    const project = db.prepare("SELECT login_id FROM users WHERE id=?").get(row.user_id);
+    const loginId = project?.login_id;
+    if (!loginId) continue;
+    const subs = db.prepare("SELECT * FROM push_subs WHERE login_id=?").all(loginId);
+    if (!subs.length) continue;
+    t.notified = true;
+    upsertItem(row.user_id, "task", row.id, t, Date.now());
+    for (const sub of subs) sendPush(sub).catch(() => {});
+  }
+}
+setInterval(scanReminders, 60_000);
 function parseForm(s) { return Object.fromEntries(new URLSearchParams(s)); }
 function authRedirectError(res, redirectUri, state, error, desc) {
   const u = new URL(redirectUri);
@@ -624,10 +683,30 @@ if (process.argv[2] === "mcp-key-revoke") {
   console.log("API key iptal edildi");
   process.exit(0);
 }
+if (process.argv[2] === "vapid-gen") {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const rawPub = publicKey.export({ type: "spki", format: "der" }).subarray(-65);
+  const derPriv = privateKey.export({ type: "pkcs8", format: "der" });
+  const b64url = buf => Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  console.log("Aşağıdakileri .env dosyasına ekle:\n");
+  console.log("VAPID_PUBLIC=" + b64url(rawPub));
+  console.log("VAPID_PRIVATE=" + derPriv.toString("base64"));
+  console.log("VAPID_SUBJECT=mailto:<e-posta-adresin>");
+  process.exit(0);
+}
 
 const INDEX_TPL = fs.readFileSync(path.join(__dirname, "public", "index.html"), "utf8");
 const LOGIN = fs.readFileSync(path.join(__dirname, "public", "login.html"));
 const RESET_PAGE = fs.readFileSync(path.join(__dirname, "public", "reset.html"));
+const MANIFEST = fs.readFileSync(path.join(__dirname, "public", "manifest.webmanifest"));
+const SW_JS = fs.readFileSync(path.join(__dirname, "public", "sw.js"));
+const ICONS_DIR = path.join(__dirname, "public", "icons");
+const ICON_FILES = {
+  "/icons/icon-192.png": fs.readFileSync(path.join(ICONS_DIR, "icon-192.png")),
+  "/icons/icon-512.png": fs.readFileSync(path.join(ICONS_DIR, "icon-512.png")),
+  "/icons/icon-maskable-512.png": fs.readFileSync(path.join(ICONS_DIR, "icon-maskable-512.png")),
+  "/apple-touch-icon.png": fs.readFileSync(path.join(ICONS_DIR, "apple-touch-icon.png")),
+};
 /* JS string literal olarak güvenli göm: JSON.stringify "</script>" dizisini kaçırmaz (script
    bloğundan kaçışa izin verir) ve String.replace "$&" gibi kalıpları işler — ikisine de kapalı */
 const jsStr = v => JSON.stringify(String(v)).replace(/</g, "\\u003c");
@@ -817,6 +896,10 @@ http.createServer(async (req, res) => {
 
   try {
     if (p === "/healthz") { res.writeHead(200, { "Content-Type": "text/plain" }); res.end("ok"); return; }
+
+    if (p === "/manifest.webmanifest") { res.writeHead(200, { "Content-Type": "application/manifest+json" }); res.end(MANIFEST); return; }
+    if (p === "/sw.js") { res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Service-Worker-Allowed": "/" }); res.end(SW_JS); return; }
+    if (ICON_FILES[p]) { res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" }); res.end(ICON_FILES[p]); return; }
 
     if (p === "/mcp") { await handleMcp(req, res); return; }
 
@@ -1134,6 +1217,40 @@ http.createServer(async (req, res) => {
           `).all(user.id, phrase);
           json(res, 200, { results: rows });
         } catch (e) { json(res, 200, { results: [] }); }
+        return;
+      }
+
+      if (p === "/api/push/vapid-key" && req.method === "GET") {
+        json(res, 200, { key: VAPID_PUBLIC });
+        return;
+      }
+
+      if (p === "/api/push/subscribe" && req.method === "POST") {
+        let body;
+        try { body = JSON.parse(await readBody(req)); } catch { json(res, 400, { error: "Geçersiz JSON" }); return; }
+        const { endpoint, keys } = body || {};
+        if (!endpoint || !keys?.p256dh || !keys?.auth) { json(res, 400, { error: "Eksik abonelik verisi" }); return; }
+        const loginId = (loginOf(user) || user).id;
+        db.prepare(`INSERT INTO push_subs(endpoint,login_id,p256dh,auth,created) VALUES(?,?,?,?,?)
+          ON CONFLICT(endpoint) DO UPDATE SET login_id=excluded.login_id, p256dh=excluded.p256dh, auth=excluded.auth`)
+          .run(endpoint, loginId, keys.p256dh, keys.auth, Date.now());
+        json(res, 200, { ok: true });
+        return;
+      }
+
+      if (p === "/api/push/unsubscribe" && req.method === "POST") {
+        let body;
+        try { body = JSON.parse(await readBody(req)); } catch { body = {}; }
+        if (body?.endpoint) db.prepare("DELETE FROM push_subs WHERE endpoint=?").run(body.endpoint);
+        json(res, 200, { ok: true });
+        return;
+      }
+
+      if (p === "/api/reminders/pending" && req.method === "GET") {
+        const now = Date.now();
+        const tasks = listItems(user.id, "task").filter(t => !t.done && t.remind && !t.notified && t.due && new Date(t.due).getTime() <= now);
+        for (const t of tasks) { t.notified = true; upsertItem(user.id, "task", t.id, t, Date.now()); }
+        json(res, 200, { reminders: tasks.map(t => ({ id: t.id, text: t.text })) });
         return;
       }
 

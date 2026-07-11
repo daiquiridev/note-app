@@ -2,9 +2,15 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>defter.</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='15' y='10' width='70' height='80' rx='10' fill='%234f9d8b'/><rect x='28' y='28' width='44' height='6' rx='3' fill='white' opacity='.9'/><rect x='28' y='44' width='36' height='6' rx='3' fill='white' opacity='.6'/><rect x='28' y='60' width='40' height='6' rx='3' fill='white' opacity='.6'/></svg>">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#4f9d8b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="defter.">
 <style>
 :root{
   --text:#3a413c; --muted:#98a099; --soft:#5f6a62;
@@ -97,8 +103,8 @@ input,textarea{font:inherit;color:inherit}
 /* ── Kenar çubuğu ───────────────────────────
    sidebar hep yerinde durur; kapatınca main onun üzerine kayar (sidebar hareket etmez) */
 .sidebar{position:absolute;top:0;left:0;bottom:0;width:272px;min-width:272px;background:transparent;
-  display:flex;flex-direction:column;z-index:1}
-.brand{display:flex;align-items:center;gap:8px;padding:16px 16px 12px;user-select:none}
+  display:flex;flex-direction:column;z-index:1;padding-bottom:env(safe-area-inset-bottom)}
+.brand{display:flex;align-items:center;gap:8px;padding:calc(16px + env(safe-area-inset-top)) 16px 12px;user-select:none}
 .brand .logo{width:27px;height:27px;border-radius:8px;background:var(--grad);display:grid;place-items:center;flex-shrink:0;box-shadow:0 4px 12px rgba(95,150,130,.35)}
 .brand .logo svg{width:15px;height:15px;stroke:#fff}
 .brand b{font-size:15.5px;letter-spacing:-.2px}
@@ -170,7 +176,7 @@ input,textarea{font:inherit;color:inherit}
   transition:left .18s ease;z-index:2}
 [data-theme="dark"] .main{background:rgba(35,39,34,.97);box-shadow:none}
 #appRoot.collapsed .main{left:0}
-.topbar{display:flex;align-items:center;gap:6px;padding:12px 26px;min-height:52px;border-bottom:1px solid var(--line)}
+.topbar{display:flex;align-items:center;gap:6px;padding:calc(12px + env(safe-area-inset-top)) 26px 12px;min-height:52px;border-bottom:1px solid var(--line)}
 .topbar .icon-btn{padding:5px;border-radius:8px;line-height:0;transition:background .15s;
   background:var(--glass2);border:1px solid transparent}
 .topbar .icon-btn:hover{background:var(--glass3);border-color:var(--border)}
@@ -742,6 +748,13 @@ input,textarea{font:inherit;color:inherit}
       <button data-theme-choice="dark"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/></svg>Koyu</button>
     </div>
     <div class="accent-row" id="acctAccentRow"></div>
+    <div class="divider cloud-only" id="acctDividerPush"></div>
+    <div class="cloud-only" id="acctPushSection">
+      <label>Bildirimler</label>
+      <div class="row">
+        <button class="btn-meet" id="btnPushToggle"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0"/></svg><span id="pushToggleLabel">Bildirimleri aç</span></button>
+      </div>
+    </div>
     <div class="divider"></div>
     <label>Veri</label>
     <div class="row">
@@ -2899,6 +2912,7 @@ async function switchAccount(id) {
 function openAccountModal() {
   $("#pwCur").value = ""; $("#pwNew").value = ""; $("#pwNew2").value = ""; $("#pwMsg").textContent = ""; $("#pwMsg").className = "msg";
   loadAccountList();
+  refreshPushButton();
   $("#accountOverlay").classList.add("show");
 }
 function closeAccountModal() { $("#accountOverlay").classList.remove("show"); }
@@ -2947,8 +2961,51 @@ function tickWidget() {
 }
 tickWidget(); setInterval(tickWidget, 10000);
 
+/* ═══════════ PWA: service worker + web push ═══════════ */
+function urlBase64ToUint8Array(base64) {
+  const padded = base64.padEnd(base64.length + (4 - base64.length % 4) % 4, "=");
+  const raw = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+function registerSW() {
+  if (!CLOUD || !("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+async function refreshPushButton() {
+  const label = $("#pushToggleLabel"); if (!label) return;
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) { label.textContent = "Bu tarayıcıda desteklenmiyor"; return; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    label.textContent = sub ? "Bildirimleri kapat" : "Bildirimleri aç";
+  } catch { label.textContent = "Bildirimleri aç"; }
+}
+async function togglePush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) { toast("Bu tarayıcı push bildirimi desteklemiyor"); return; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) {
+      await fetch("/api/push/unsubscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint: existing.endpoint }) });
+      await existing.unsubscribe();
+      toast("Bildirimler kapatıldı");
+    } else {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { toast("Bildirim izni verilmedi"); return; }
+      const { key } = await (await fetch("/api/push/vapid-key")).json();
+      if (!key) { toast("Sunucuda push yapılandırılmamış"); return; }
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) });
+      await fetch("/api/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub.toJSON()) });
+      toast("Bildirimler açıldı");
+    }
+  } catch (e) { toast("Bildirim ayarı başarısız: " + (e.message || e)); }
+  refreshPushButton();
+}
+$("#btnPushToggle")?.addEventListener("click", togglePush);
+
 /* ═══════════ başlat ═══════════ */
 applyTheme(); applyAccent();
+registerSW();
 if (state.pin) lockNow();
 if (CLOUD) { setAccountAvatar(window.DEFTER_EMAIL); cloudPull(true); }
 else {

@@ -165,6 +165,33 @@ try {
 
   const yEmpty = await fetch(BASE + "/yakala?metin=", { headers: { Cookie: cookieHeader() } });
   ok(yEmpty.status === 400, "boş metin → 400", String(yEmpty.status));
+
+  console.log("10) PWA statik dosyalar + web push");
+  const manifestR = await fetch(BASE + "/manifest.webmanifest");
+  ok(manifestR.status === 200 && (await manifestR.json()).name === "defter.", "manifest.webmanifest sunuluyor");
+  const swR = await fetch(BASE + "/sw.js");
+  ok(swR.status === 200 && (await swR.text()).includes("self.addEventListener"), "sw.js sunuluyor");
+  const iconR = await fetch(BASE + "/icons/icon-192.png");
+  ok(iconR.status === 200 && iconR.headers.get("content-type") === "image/png", "icon PNG sunuluyor");
+
+  const vapidR = await api("/api/push/vapid-key");
+  ok(vapidR.status === 200, "vapid-key uotomatik 200", String(vapidR.status));
+  const subBad = await api("/api/push/subscribe", { method: "POST", body: JSON.stringify({ endpoint: "https://example.com/x" }) });
+  ok(subBad.status === 400, "eksik keys ile subscribe → 400", String(subBad.status));
+  const subOk = await api("/api/push/subscribe", { method: "POST", body: JSON.stringify({ endpoint: "https://example.com/push/abc", keys: { p256dh: "p", auth: "a" } }) });
+  ok(subOk.status === 200, "geçerli subscribe → 200", String(subOk.status));
+  const unsub = await api("/api/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint: "https://example.com/push/abc" }) });
+  ok(unsub.status === 200, "unsubscribe → 200", String(unsub.status));
+
+  const pastDue = new Date(Date.now() - 3600_000).toISOString().slice(0, 16);
+  await sync((await (await api("/api/data")).json()).seq, others); // temiz taban
+  const curTasks = await (await api("/api/data")).json();
+  const rTask = { baseSeq: curTasks.seq, data: { notes: others, tasks: [{ id: "rt1", text: "Vadesi geçmiş görev", done: false, due: pastDue, remind: true, notified: false, created: Date.now(), updated: Date.now() }], folders: [], mtime: Date.now() } };
+  await api("/api/sync", { method: "POST", body: JSON.stringify(rTask) });
+  const rem1 = await (await api("/api/reminders/pending")).json();
+  ok((rem1.reminders || []).some(r => r.id === "rt1"), "vadesi geçmiş+remind görevi pending listede");
+  const rem2 = await (await api("/api/reminders/pending")).json();
+  ok(!(rem2.reminders || []).some(r => r.id === "rt1"), "ikinci çağrıda AYNI görev tekrar dönmüyor (notified=true)");
 } catch (e) {
   console.error("beklenmeyen hata:", e);
   failed++;

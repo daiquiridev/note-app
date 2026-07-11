@@ -16,6 +16,8 @@ Notion-tarzı, **sıfır npm bağımlılıklı** not & görev uygulaması. Tek N
 - Tam metin arama (SQLite FTS5): notlar, görev açıklamaları ve klasörler Ctrl+K'dan aranabilir
 - AI özeti: tek tıkla not özeti + aksiyon listesi (Workers AI LLM, aynı STT Worker üzerinden)
 - Günlük not + şablonlar; hızlı yakalama (`/yakala`) ile telefondan/tarayıcıdan tek adımda not düşme
+- `[[not bağlantısı]]` + backlinks paneli ("Bundan bahsedenler")
+- PWA (ana ekrana eklenebilir) + Web Push görev hatırlatıcıları (uygulama kapalıyken de çalışır)
 
 ## Çalıştırma
 
@@ -35,6 +37,7 @@ SECRET=<rastgele-hex> DATA_DIR=./data PORT=8080 node server.js
 | `RESEND_API_KEY`, `MAIL_FROM` | — | E-posta (yeni cihaz bildirimi, parola sıfırlama) |
 | `APP_URL` | — | Mutlak URL üretimi (e-postadaki linkler, OAuth) |
 | `STT_WORKER_URL`, `STT_WORKER_SECRET` | — | Toplantı transkripsiyonu için Worker adresi + Bearer secret |
+| `VAPID_PUBLIC`, `VAPID_PRIVATE`, `VAPID_SUBJECT` | — | Web Push imzalama anahtarları (`node server.js vapid-gen` ile üret) |
 
 ## CLI komutları
 
@@ -46,6 +49,7 @@ node server.js login-adopt <email> <proje_id>   # mevcut projenin parolasıyla l
 node server.js project-link <proje_id> <login_email> [ad]  # projeyi login'e bağla
 node server.js mcp-key-add <login_email> [etiket]   # MCP statik API key üret
 node server.js mcp-key-list [email] / mcp-key-revoke <önek>
+node server.js vapid-gen                        # Web Push imzalama anahtar çifti üret (bir kez)
 ```
 
 ## Deploy (Hetzner)
@@ -76,6 +80,21 @@ Sayfasında Göster").
 javascript:location.href='https://notes.daiquiri.dev/yakala?metin='+encodeURIComponent(window.getSelection().toString()||document.title+' '+location.href)
 ```
 Seçili metin varsa onu, yoksa sayfa başlığı + URL'ini günlük nota ekler.
+
+## PWA + Web Push
+
+`public/manifest.webmanifest` + `public/sw.js` + `public/icons/`. Kurulum:
+1. `node server.js vapid-gen` → çıktıyı `.env`'e ekle, sunucuyu yeniden başlat.
+2. Ayarlar → Bildirimler → "Bildirimleri aç" (tarayıcı izin ister).
+3. iOS'ta Web Push yalnızca **ana ekrana eklenmiş** PWA'da çalışır (iOS 16.4+); Safari
+   sekmesinden değil, "Ana Ekrana Ekle" sonrası açılan uygulamadan izin ver.
+
+Push **payload'sız**: sunucu yalnızca "uyandırma" sinyali gönderir (VAPID imzalı, boş gövde —
+RFC 8291 şifrelemesi gerekmez), service worker `push` olayında `/api/reminders/pending`'i çekip
+bildirimi kendisi gösterir. Sunucu tarafında her 60 saniyede bir vadesi gelen görevler taranır
+(`scanReminders`) — bu, uygulama/sekme kapalıyken de bildirim gelmesini sağlar; uygulama açıkken
+zaten çalışan istemci-içi hatırlatıcıyla birlikte çalışır, çakışma riski yok (`notified` alanı
+her iki tarafta da paylaşılır).
 
 ## STT Worker
 
