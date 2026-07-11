@@ -208,9 +208,24 @@ input,textarea{font:inherit;color:inherit}
 
 /* ── Bloklar ─────────────────────────────── */
 .blocks{counter-reset:num}
-.blk{display:flex;align-items:flex-start;gap:6px;border-radius:6px;padding:1px 2px;position:relative}
+.blk{display:flex;align-items:flex-start;gap:2px;border-radius:6px;padding:1px 2px;position:relative}
 .blk:not([data-type="num"]){counter-reset:num}
 .blk[data-type="num"]{counter-increment:num}
+.blk-handle{width:18px;height:24px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  cursor:grab;border-radius:5px;visibility:hidden;color:var(--muted);margin-top:2px;background:none}
+.blk:hover .blk-handle{visibility:visible}
+.blk-handle:hover{background:var(--hover);color:var(--text)}
+.blk-handle svg{width:13px;height:13px}
+.blk.dragging{opacity:.35}
+.blk.drag-over-top{box-shadow:inset 0 2px 0 0 var(--accent)}
+.blk.drag-over-bottom{box-shadow:inset 0 -2px 0 0 var(--accent)}
+.blk-body{flex:1;min-width:0;display:flex;align-items:flex-start;gap:6px}
+.toggle-chev{width:16px;height:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;border-radius:4px;margin-top:4px;color:var(--muted);background:none}
+.toggle-chev:hover{background:var(--hover)}
+.toggle-chev svg{width:11px;height:11px;transition:transform .12s}
+.toggle-chev.closed svg{transform:rotate(-90deg)}
+.blk[data-type="toggle"] .bc{font-weight:600}
 .bc{flex:1;outline:none;min-height:1.55em;word-break:break-word;white-space:pre-wrap;padding:2px 0}
 .bc:empty::after{content:"";display:inline-block}
 .bc[data-ph]:empty:focus::before,.bc.always-ph:empty::before{content:attr(data-ph);color:var(--muted);opacity:.65;pointer-events:none}
@@ -583,6 +598,11 @@ input,textarea{font:inherit;color:inherit}
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="brand"><div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></div><b>defter<i>.</i></b></div>
+    <div class="side-widget">
+      <b id="dwDay"></b>
+      <div class="dw-mid"><span id="dwWeekday"></span><small id="dwMonth"></small></div>
+      <div class="dw-time" id="dwTime"></div>
+    </div>
     <div class="side-search">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       <input id="sideSearch" type="text" placeholder="Ara..." autocomplete="off">
@@ -596,11 +616,6 @@ input,textarea{font:inherit;color:inherit}
     <input type="file" id="importFile" accept=".json" style="display:none">
     <input type="file" id="imgFile" accept="image/*" style="display:none">
     <div class="side-foot">
-      <div class="side-widget">
-        <b id="dwDay"></b>
-        <div class="dw-mid"><span id="dwWeekday"></span><small id="dwMonth"></small></div>
-        <div class="dw-time" id="dwTime"></div>
-      </div>
       <button class="user-card" id="btnAccount" title="Ayarlar">
         <span class="account-btn" id="accountBtnAv"></span>
         <span class="uc-info">
@@ -727,6 +742,7 @@ input,textarea{font:inherit;color:inherit}
 <div class="toasts" id="toasts"></div>
 <div class="slash-menu" id="slashMenu"></div>
 <div class="mini-menu" id="folderMenu"></div>
+<div class="mini-menu" id="blockMenu"></div>
 
 <script>window.DEFTER_UID = "__UID__"; window.DEFTER_EMAIL = "__EMAIL__"; window.DEFTER_PROJECT = "__PROJECT__";</script>
 <script>
@@ -761,6 +777,10 @@ const ICONS = {
   clock:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   moveTo:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
   dots:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+  grip:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>',
+  up:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+  down:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>',
+  copy:'<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
 };
 
 /* ═══════════ durum ═══════════ */
@@ -971,7 +991,7 @@ function openNote(id, focus) {
   $(".page-meta [data-move]").addEventListener("click", () => moveNoteToFolder(n.id));
   $(".page-meta [data-pmove]")?.addEventListener("click", () => moveNoteToProject(n.id));
   const wrap = $("#blocks");
-  n.blocks.forEach(b => wrap.appendChild(blockEl(n, b)));
+  visibleBlocks(n).forEach(b => wrap.appendChild(blockEl(n, b)));
   bindTitle(n);
   renderSidebar();
   if (focus === "title") $("#titleInput").focus();
@@ -1004,37 +1024,84 @@ const BLOCK_TYPES = [
   { type: "bullet", label: "Madde listesi",  desc: "Basit madde imli liste",    ic: "•",  kw: "madde liste bullet" },
   { type: "num",    label: "Numaralı liste", desc: "Sıralı liste",              ic: "1.", kw: "numara sirali liste" },
   { type: "quote",  label: "Alıntı",         desc: "Vurgulu alıntı bloğu",      ic: "❝",  kw: "alinti quote" },
+  { type: "toggle", label: "Toggle",         desc: "Açılır/kapanır başlık",     ic: "▸",  kw: "toggle acilir kapanir katlanir" },
   { type: "code",   label: "Kod",            desc: "Eş aralıklı kod bloğu",     ic: "</>",kw: "kod code" },
   { type: "divider",label: "Ayraç",          desc: "Yatay ayırıcı çizgi",       ic: "—",  kw: "ayrac cizgi divider" },
   { type: "img",    label: "Görsel",         desc: "Panodan Ctrl+V ya da dosyadan", ic: "🖼", kw: "gorsel resim image foto ekran" },
 ];
 const PH = { p: "Yazın, '/' ile komutlar…", h1: "Başlık 1", h2: "Başlık 2", h3: "Başlık 3",
-  todo: "Yapılacak", bullet: "Liste", num: "Liste", quote: "Alıntı", code: "Kod" };
+  todo: "Yapılacak", bullet: "Liste", num: "Liste", quote: "Alıntı", code: "Kod", toggle: "Toggle başlığı" };
+/* girinti + toggle katlama dikkate alınarak görünür bloklar (kapalı bir toggle'ın altındakiler gizlenir) */
+function visibleBlocks(note) {
+  const out = [];
+  let skipUntil = null;
+  for (const b of note.blocks) {
+    if (skipUntil !== null) {
+      if ((b.indent || 0) > skipUntil) continue;
+      skipUntil = null;
+    }
+    out.push(b);
+    if (b.type === "toggle" && b.collapsed) skipUntil = b.indent || 0;
+  }
+  return out;
+}
 
+let draggingBlockId = null;
 function blockEl(note, b) {
   const el = document.createElement("div");
   el.className = "blk" + (b.checked ? " done" : "");
   el.dataset.id = b.id; el.dataset.type = b.type;
+  if (b.indent) el.style.marginLeft = (b.indent * 22) + "px";
+  el.appendChild(blockHandle(note, b, el));
+  el.addEventListener("dragover", e => {
+    if (!draggingBlockId || draggingBlockId === b.id) return;
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    const before = (e.clientY - r.top) < r.height / 2;
+    el.classList.toggle("drag-over-top", before);
+    el.classList.toggle("drag-over-bottom", !before);
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("drag-over-top", "drag-over-bottom"));
+  el.addEventListener("drop", e => {
+    e.preventDefault();
+    const before = el.classList.contains("drag-over-top");
+    el.classList.remove("drag-over-top", "drag-over-bottom");
+    const srcId = draggingBlockId; draggingBlockId = null;
+    if (!srcId || srcId === b.id) return;
+    moveBlock(note, srcId, b.id, before);
+  });
+
+  const body = document.createElement("div");
+  body.className = "blk-body";
+
   if (b.type === "divider" || b.type === "img") {
-    el.innerHTML = b.type === "divider" ? "<hr>" : `<img src="${b.src || ""}" alt="">`;
-    el.tabIndex = 0;
-    el.addEventListener("focus", () => el.classList.add("sel"));
-    el.addEventListener("blur", () => el.classList.remove("sel"));
-    el.addEventListener("click", () => el.focus());
-    el.addEventListener("keydown", e => {
+    body.innerHTML = b.type === "divider" ? "<hr>" : `<img src="${b.src || ""}" alt="">`;
+    body.tabIndex = 0;
+    body.addEventListener("focus", () => el.classList.add("sel"));
+    body.addEventListener("blur", () => el.classList.remove("sel"));
+    body.addEventListener("click", () => body.focus());
+    body.addEventListener("keydown", e => {
       const i = note.blocks.findIndex(x => x.id === b.id);
       if (e.key === "Backspace" || e.key === "Delete") { e.preventDefault(); removeBlock(note, b.id, true); }
       else if (e.key === "Enter") { e.preventDefault(); insertBlockAfter(note, b.id, "p"); }
       else if (e.key === "ArrowUp") { e.preventDefault(); i === 0 ? $("#titleInput")?.focus() : focusAnyBlock(note, i - 1, "end"); }
       else if (e.key === "ArrowDown") { e.preventDefault(); focusAnyBlock(note, i + 1, "start"); }
     });
+    el.appendChild(body);
     return el;
   }
   if (b.type === "todo") {
     const cb = document.createElement("input");
     cb.type = "checkbox"; cb.className = "todo-box"; cb.checked = !!b.checked;
     cb.addEventListener("change", () => { b.checked = cb.checked; el.classList.toggle("done", cb.checked); note.updated = Date.now(); deferSave(); });
-    el.appendChild(cb);
+    body.appendChild(cb);
+  }
+  if (b.type === "toggle") {
+    const chev = document.createElement("button");
+    chev.type = "button"; chev.className = "toggle-chev" + (b.collapsed ? " closed" : "");
+    chev.innerHTML = ICONS.chev;
+    chev.addEventListener("click", () => { b.collapsed = !b.collapsed; note.updated = Date.now(); rerenderBlocks(note); deferSave(); });
+    body.appendChild(chev);
   }
   const c = document.createElement("div");
   c.className = "bc";
@@ -1051,9 +1118,76 @@ function blockEl(note, b) {
     if (imgItem) { insertImageFromFile(note, b, imgItem.getAsFile()); return; }
     document.execCommand("insertText", false, cd.getData("text/plain"));
   });
-  el.appendChild(c);
+  body.appendChild(c);
+  el.appendChild(body);
   return el;
 }
+function blockHandle(note, b, el) {
+  const h = document.createElement("button");
+  h.type = "button"; h.className = "blk-handle"; h.draggable = true;
+  h.title = "Sürükle veya tıkla: taşı / çoğalt / sil";
+  h.innerHTML = ICONS.grip;
+  h.addEventListener("mousedown", e => e.stopPropagation());
+  h.addEventListener("click", e => { e.stopPropagation(); openBlockMenu(note.id, b.id, h); });
+  h.addEventListener("dragstart", e => {
+    draggingBlockId = b.id;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", b.id);
+    setTimeout(() => el.classList.add("dragging"), 0);
+  });
+  h.addEventListener("dragend", () => { el.classList.remove("dragging"); draggingBlockId = null; });
+  return h;
+}
+function moveBlock(note, srcId, targetId, before) {
+  const from = note.blocks.findIndex(x => x.id === srcId);
+  if (from < 0) return;
+  const [item] = note.blocks.splice(from, 1);
+  let to = note.blocks.findIndex(x => x.id === targetId);
+  if (to < 0) to = note.blocks.length;
+  note.blocks.splice(before ? to : to + 1, 0, item);
+  note.updated = Date.now();
+  rerenderBlocks(note);
+  deferSave();
+}
+/* ── blok "···" menüsü: yukarı/aşağı taşı, çoğalt, sil ── */
+let blockMenuFor = null;
+function openBlockMenu(noteId, blockId, btn) {
+  blockMenuFor = { noteId, blockId };
+  const menu = $("#blockMenu");
+  menu.innerHTML = `
+    <button data-act="up">${ICONS.up}Yukarı taşı</button>
+    <button data-act="down">${ICONS.down}Aşağı taşı</button>
+    <button data-act="dup">${ICONS.copy}Çoğalt</button>
+    <button data-act="del" class="danger">${ICONS.trash}Sil</button>
+  `;
+  const r = btn.getBoundingClientRect();
+  menu.classList.add("show");
+  menu.style.top = r.top + "px";
+  menu.style.left = Math.min(r.right + 6, window.innerWidth - menu.offsetWidth - 10) + "px";
+}
+function closeBlockMenu() { $("#blockMenu").classList.remove("show"); blockMenuFor = null; }
+$("#blockMenu").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-act]"); if (!btn) return;
+  const target = blockMenuFor; closeBlockMenu();
+  if (!target) return;
+  const n = noteById(target.noteId); if (!n) return;
+  const i = n.blocks.findIndex(x => x.id === target.blockId); if (i < 0) return;
+  if (btn.dataset.act === "up" && i > 0) {
+    [n.blocks[i - 1], n.blocks[i]] = [n.blocks[i], n.blocks[i - 1]];
+    n.updated = Date.now(); rerenderBlocks(n); deferSave();
+  } else if (btn.dataset.act === "down" && i < n.blocks.length - 1) {
+    [n.blocks[i + 1], n.blocks[i]] = [n.blocks[i], n.blocks[i + 1]];
+    n.updated = Date.now(); rerenderBlocks(n); deferSave();
+  } else if (btn.dataset.act === "dup") {
+    n.blocks.splice(i + 1, 0, { ...n.blocks[i], id: uid() });
+    n.updated = Date.now(); rerenderBlocks(n); deferSave();
+  } else if (btn.dataset.act === "del") {
+    removeBlock(n, target.blockId);
+  }
+});
+document.addEventListener("click", e => {
+  if ($("#blockMenu").classList.contains("show") && !e.target.closest("#blockMenu") && !e.target.closest(".blk-handle")) closeBlockMenu();
+});
 
 function normalize(c) { if (c.innerHTML === "<br>" || c.innerHTML === "<div><br></div>") c.innerHTML = ""; }
 
@@ -1095,6 +1229,21 @@ function caretAtEnd(el) {
 function onBlockKey(e, note, b, c) {
   if (slash.open) {
     if (["ArrowDown", "ArrowUp", "Enter", "Escape", "Tab"].includes(e.key)) { e.preventDefault(); slashKey(e.key); return; }
+  }
+  if (e.key === "Tab") {
+    e.preventDefault();
+    const i = note.blocks.findIndex(x => x.id === b.id);
+    if (e.shiftKey) {
+      b.indent = Math.max(0, (b.indent || 0) - 1);
+    } else {
+      const prevIndent = i > 0 ? (note.blocks[i - 1].indent || 0) : 0;
+      b.indent = Math.min((b.indent || 0) + 1, prevIndent + 1, 6);
+    }
+    note.updated = Date.now();
+    rerenderBlocks(note);
+    focusBlock(b.id, "end");
+    deferSave();
+    return;
   }
   if (e.key === "Enter" && !e.shiftKey && b.type !== "code") {
     e.preventDefault();
@@ -1164,7 +1313,8 @@ function blockContentEl(id) { return document.querySelector(`.blk[data-id="${id}
 
 function insertBlockAfter(note, afterId, type = "p", html = "") {
   const i = note.blocks.findIndex(x => x.id === afterId);
-  const nb = { id: uid(), type, html, checked: false };
+  const indent = i >= 0 ? (note.blocks[i].indent || 0) : 0;
+  const nb = { id: uid(), type, html, checked: false, indent };
   note.blocks.splice(i + 1, 0, nb);
   note.updated = Date.now();
   rerenderBlocks(note);
@@ -1193,7 +1343,7 @@ function removeBlock(note, id, focusNext = false) {
 function rerenderBlocks(note) {
   const wrap = $("#blocks"); if (!wrap) return;
   wrap.innerHTML = "";
-  note.blocks.forEach(b => wrap.appendChild(blockEl(note, b)));
+  visibleBlocks(note).forEach(b => wrap.appendChild(blockEl(note, b)));
 }
 function focusBlock(id, pos = "end") {
   const c = blockContentEl(id); if (!c) return;
@@ -2268,6 +2418,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "Escape") {
     closeSlash();
     closeFolderMenu();
+    closeBlockMenu();
     if (pal.open) closePalette();
     closeAccountModal();
     $("#pomoPop").classList.remove("show");
@@ -2301,14 +2452,16 @@ function adoptServer(j) {
   hydrate();
   flashSave("Eşitlendi ☁");
 }
+function isActivelyEditingNote() {
+  return view.mode === "note" && document.activeElement &&
+    (document.activeElement.closest?.("#blocks") || document.activeElement.id === "titleInput");
+}
 function hydrate() {
   applyTheme(); applyAccent(); renderSidebar();
   // sunucudan "değişiklik var" sinyaliyle gelen bir yenileme, tam o an bir bloğa/başlığa
   // yazarken notu yeniden açıp imleci/odağı koparmasın — state zaten güncellendi, görsel
   // yenileme kullanıcı yazmayı bırakınca (blur/navigasyon) doğal olarak gerçekleşecek
-  const activelyEditing = view.mode === "note" && document.activeElement &&
-    (document.activeElement.closest?.("#blocks") || document.activeElement.id === "titleInput");
-  if (activelyEditing && noteById(view.noteId)) return;
+  if (isActivelyEditingNote() && noteById(view.noteId)) return;
   if (routeFromLocation()) return;
   if (view.mode === "tasks") openTasks();
   else if (view.mode === "cal") openCal();
@@ -2361,6 +2514,15 @@ async function cloudPush() {
     if (r.status === 401) { location.href = "/login"; return; }
     if (!r.ok) throw 0;
     const j = await r.json();
+    if (isActivelyEditingNote()) {
+      // aktif olarak bir bloga/basliga yazarken ne seq'i ilerlet ne de state'i degistir:
+      // state'i degistirmek duzenlenmekte olan not nesnesini koparip yazilanlari kaybettirir;
+      // seq'i erken ilerletmek de henuz yerelde birlestirilmemis uzak ogelerin bir sonraki
+      // pushta yanlislikla "zaten biliyordun" sanilip silinmesine (tombstone) yol acabilir.
+      // Kullanici yazmayi birakinca bir sonraki push normal sekilde islenip senkron olur.
+      schedulePush(1500);
+      return;
+    }
     rememberSeq(j.seq);
     if (j.changed && j.data) {
       // sunucuda bizde olmayan değişiklik var; yazma sırasında yerel değişiklik olduysa önce onu gönder
