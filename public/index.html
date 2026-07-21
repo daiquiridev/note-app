@@ -238,9 +238,10 @@ input,textarea{font:inherit;color:inherit}
 .blk[data-type="h1"] .bc{font-size:26px;font-weight:750;letter-spacing:-.4px;padding-top:16px}
 .blk[data-type="h2"] .bc{font-size:21px;font-weight:680;letter-spacing:-.3px;padding-top:12px}
 .blk[data-type="h3"] .bc{font-size:17px;font-weight:680;padding-top:8px}
-.blk[data-type="bullet"] .bc::before{content:"•";position:absolute;left:8px;color:var(--accent);font-weight:800}
+.blk[data-type="bullet"] .bc,.blk[data-type="num"] .bc{position:relative}
+.blk[data-type="bullet"] .bc::before{content:"•";position:absolute;left:8px;top:2px;color:var(--accent);font-weight:800}
 .blk[data-type="bullet"] .bc{padding-left:26px}
-.blk[data-type="num"] .bc::before{content:counter(num) ".";position:absolute;left:6px;color:var(--accent);
+.blk[data-type="num"] .bc::before{content:counter(num) ".";position:absolute;left:0;top:2px;color:var(--accent);
   font-variant-numeric:tabular-nums;font-weight:600}
 .blk[data-type="num"] .bc{padding-left:26px}
 .blk[data-type="quote"]{border-left:3px solid var(--accent);margin:2px 0;background:var(--glass2);border-radius:0 10px 10px 0}
@@ -261,6 +262,25 @@ input,textarea{font:inherit;color:inherit}
 .blk[data-type="img"] img{max-width:100%;max-height:480px;border-radius:12px;display:block;border:1px solid var(--line)}
 .blk[data-type="img"].sel img{outline:2px solid var(--accent);outline-offset:2px}
 
+/* ── Biçimlendirme araç çubuğu (sabit + seçimde beliren) ── */
+.fmt-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:1px;flex-wrap:wrap;
+  padding:5px;margin:0 0 10px;background:var(--glass3);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow)}
+.fmt-btn{min-width:28px;height:28px;padding:0 7px;border-radius:7px;background:none;border:1px solid transparent;
+  color:var(--soft);font-size:13px;line-height:1;cursor:pointer;transition:background .12s,border-color .12s;
+  display:inline-flex;align-items:center;justify-content:center;gap:4px;user-select:none}
+.fmt-btn:hover{background:var(--hover)}
+.fmt-btn.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.fmt-btn[data-cmd="bold"]{font-weight:800}
+.fmt-btn[data-cmd="italic"]{font-style:italic}
+.fmt-btn[data-cmd="underline"]{text-decoration:underline}
+.fmt-btn[data-cmd="strikeThrough"]{text-decoration:line-through}
+.fmt-sep{width:1px;align-self:stretch;margin:4px 3px;background:var(--line);flex-shrink:0}
+.sel-toolbar{position:fixed;z-index:85;display:none;align-items:center;gap:1px;padding:4px;
+  background:var(--glass3);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--border);box-shadow:var(--shadow);border-radius:11px}
+.sel-toolbar.show{display:flex}
+
 /* ── Eğik çizgi menüsü ───────────────────── */
 .slash-menu{position:fixed;z-index:80;background:var(--glass3);
   backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
@@ -273,6 +293,9 @@ input,textarea{font:inherit;color:inherit}
   place-items:center;font-size:12px;font-weight:700;color:var(--soft);background:var(--glass2);flex-shrink:0}
 .slash-item b{font-size:13.5px;font-weight:550;display:block}
 .slash-item span{font-size:11.5px;color:var(--muted);display:block}
+.slash-group{font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+  color:var(--muted);padding:8px 8px 3px}
+.slash-group:first-child{padding-top:4px}
 
 /* ── Görevler ─────────────────────────────── */
 .tasks-wrap{max-width:720px;margin:0 auto;padding:0 10px}
@@ -797,6 +820,7 @@ input,textarea{font:inherit;color:inherit}
 <div class="slash-menu" id="linkMenu"></div>
 <div class="mini-menu" id="folderMenu"></div>
 <div class="mini-menu" id="blockMenu"></div>
+<div class="sel-toolbar" id="selToolbar"></div>
 
 <script>window.DEFTER_UID = "__UID__"; window.DEFTER_EMAIL = "__EMAIL__"; window.DEFTER_PROJECT = "__PROJECT__";</script>
 <script>
@@ -1107,6 +1131,7 @@ function openNote(id, focus) {
         ${CLOUD ? `<span class="meta-chip" data-pmove title="Başka projeye taşı">${ICONS.moveTo} Projeye taşı</span>` : ""}
         <span class="meta-chip" data-savetpl title="Bu notu şablon olarak kaydet">${ICONS.copy} Şablon kaydet</span>
       </div>
+      ${fmtBarHTML()}
       <div class="blocks" id="blocks"></div>
       <div class="backlinks" id="backlinks"></div>
     </div>`;
@@ -1117,6 +1142,7 @@ function openNote(id, focus) {
   visibleBlocks(n).forEach(b => wrap.appendChild(blockEl(n, b)));
   renderBacklinks(n);
   bindTitle(n);
+  bindFmtBar(n);
   renderSidebar();
   if (focus === "title") $("#titleInput").focus();
   else if (focus === "content") { const first = n.blocks.find(b => b.type !== "h3"); if (first) focusBlock(first.id); }
@@ -1149,18 +1175,18 @@ function deferSave() {
 
 /* ═══════════ blok editörü ═══════════ */
 const BLOCK_TYPES = [
-  { type: "p",      label: "Metin",          desc: "Düz paragraf",              ic: "T",  kw: "metin paragraf text" },
-  { type: "h1",     label: "Başlık 1",       desc: "Büyük bölüm başlığı",       ic: "H1", kw: "baslik heading h1" },
-  { type: "h2",     label: "Başlık 2",       desc: "Orta başlık",               ic: "H2", kw: "baslik heading h2" },
-  { type: "h3",     label: "Başlık 3",       desc: "Küçük başlık",              ic: "H3", kw: "baslik heading h3" },
-  { type: "todo",   label: "Yapılacak",      desc: "Onay kutulu görev",         ic: "☑",  kw: "yapilacak todo gorev checkbox" },
-  { type: "bullet", label: "Madde listesi",  desc: "Basit madde imli liste",    ic: "•",  kw: "madde liste bullet" },
-  { type: "num",    label: "Numaralı liste", desc: "Sıralı liste",              ic: "1.", kw: "numara sirali liste" },
-  { type: "quote",  label: "Alıntı",         desc: "Vurgulu alıntı bloğu",      ic: "❝",  kw: "alinti quote" },
-  { type: "toggle", label: "Toggle",         desc: "Açılır/kapanır başlık",     ic: "▸",  kw: "toggle acilir kapanir katlanir" },
-  { type: "code",   label: "Kod",            desc: "Eş aralıklı kod bloğu",     ic: "</>",kw: "kod code" },
-  { type: "divider",label: "Ayraç",          desc: "Yatay ayırıcı çizgi",       ic: "—",  kw: "ayrac cizgi divider" },
-  { type: "img",    label: "Görsel",         desc: "Panodan Ctrl+V ya da dosyadan", ic: "🖼", kw: "gorsel resim image foto ekran" },
+  { type: "p",      label: "Metin",          desc: "Düz paragraf",              ic: "T",  kw: "metin paragraf text",           cat: "Temel" },
+  { type: "h1",     label: "Başlık 1",       desc: "Büyük bölüm başlığı",       ic: "H1", kw: "baslik heading h1",             cat: "Temel" },
+  { type: "h2",     label: "Başlık 2",       desc: "Orta başlık",               ic: "H2", kw: "baslik heading h2",             cat: "Temel" },
+  { type: "h3",     label: "Başlık 3",       desc: "Küçük başlık",              ic: "H3", kw: "baslik heading h3",             cat: "Temel" },
+  { type: "todo",   label: "Yapılacak",      desc: "Onay kutulu görev",         ic: "☑",  kw: "yapilacak todo gorev checkbox", cat: "Liste" },
+  { type: "bullet", label: "Madde listesi",  desc: "Basit madde imli liste",    ic: "•",  kw: "madde liste bullet",            cat: "Liste" },
+  { type: "num",    label: "Numaralı liste", desc: "Sıralı liste",              ic: "1.", kw: "numara sirali liste",           cat: "Liste" },
+  { type: "quote",  label: "Alıntı",         desc: "Vurgulu alıntı bloğu",      ic: "❝",  kw: "alinti quote",                  cat: "Gelişmiş" },
+  { type: "toggle", label: "Toggle",         desc: "Açılır/kapanır başlık",     ic: "▸",  kw: "toggle acilir kapanir katlanir", cat: "Gelişmiş" },
+  { type: "code",   label: "Kod",            desc: "Eş aralıklı kod bloğu",     ic: "</>",kw: "kod code",                      cat: "Gelişmiş" },
+  { type: "divider",label: "Ayraç",          desc: "Yatay ayırıcı çizgi",       ic: "—",  kw: "ayrac cizgi divider",           cat: "Gelişmiş" },
+  { type: "img",    label: "Görsel",         desc: "Panodan Ctrl+V ya da dosyadan", ic: "🖼", kw: "gorsel resim image foto ekran", cat: "Gelişmiş" },
 ];
 const PH = { p: "Yazın, '/' ile komutlar…", h1: "Başlık 1", h2: "Başlık 2", h3: "Başlık 3",
   todo: "Yapılacak", bullet: "Liste", num: "Liste", quote: "Alıntı", code: "Kod", toggle: "Toggle başlığı" };
@@ -1510,6 +1536,88 @@ function focusBlock(id, pos = "end") {
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
 }
 
+/* ── biçimlendirme araç çubuğu ── */
+const INLINE_FMT = [
+  { cmd: "bold",          label: "B",  title: "Kalın (Ctrl+B)" },
+  { cmd: "italic",        label: "i",  title: "İtalik (Ctrl+I)" },
+  { cmd: "underline",     label: "U",  title: "Altı çizili (Ctrl+U)" },
+  { cmd: "strikeThrough", label: "S",  title: "Üstü çizili" },
+  { cmd: "link",          label: "🔗", title: "Bağlantı ekle" },
+];
+const BLOCK_FMT = [
+  { type: "bullet", label: "•",   title: "Madde listesi" },
+  { type: "num",    label: "1.",  title: "Numaralı liste" },
+  { type: "todo",   label: "☑",   title: "Yapılacak / checklist" },
+  { type: "quote",  label: "❝",   title: "Alıntı" },
+  { type: "code",   label: "</>", title: "Kod" },
+];
+function fmtBarHTML() {
+  const inline = INLINE_FMT.map(f => `<button type="button" class="fmt-btn" data-cmd="${f.cmd}" title="${f.title}">${f.label}</button>`).join("");
+  const block = BLOCK_FMT.map(f => `<button type="button" class="fmt-btn" data-type="${f.type}" title="${f.title}">${f.label}</button>`).join("");
+  return `<div class="fmt-bar" id="fmtBar">${inline}<span class="fmt-sep"></span>${block}</div>`;
+}
+// en son odaklanılan blok — sabit araç çubuğunun hangi bloğu dönüştüreceğini bilmesi için
+let activeBlock = null;
+$("#content").addEventListener("focusin", e => {
+  const blk = e.target.closest?.(".blk[data-id]");
+  if (blk) activeBlock = blk.dataset.id;
+});
+function runFmtCmd(cmd) {
+  if (cmd === "link") {
+    const s = getSelection();
+    if (!s.rangeCount || s.isCollapsed) return;
+    const url = window.prompt("Bağlantı URL'si:", "https://");
+    if (url) document.execCommand("createLink", false, url);
+    return;
+  }
+  document.execCommand(cmd, false, null);
+}
+function runFmtBlockType(note, type) {
+  const b = activeBlock && note.blocks.find(x => x.id === activeBlock);
+  if (!b) return;
+  if (b.type === type) return; // zaten o tipte
+  convertBlock(note, b, type, b.html);
+}
+function bindFmtBar(note) {
+  const bar = $("#fmtBar"); if (!bar) return;
+  bar.querySelectorAll("button[data-cmd]").forEach(btn => {
+    btn.addEventListener("mousedown", e => e.preventDefault()); // seçimi/odağı kaybetme
+    btn.addEventListener("click", () => runFmtCmd(btn.dataset.cmd));
+  });
+  bar.querySelectorAll("button[data-type]").forEach(btn => {
+    btn.addEventListener("mousedown", e => e.preventDefault());
+    btn.addEventListener("click", () => runFmtBlockType(note, btn.dataset.type));
+  });
+}
+
+/* ── seçimde beliren yüzen araç çubuğu (Notion tarzı) ── */
+function selToolbarHTML() {
+  return INLINE_FMT.map(f => `<button type="button" class="fmt-btn" data-cmd="${f.cmd}" title="${f.title}">${f.label}</button>`).join("");
+}
+function initSelToolbar() {
+  const el = $("#selToolbar"); if (!el) return;
+  el.innerHTML = selToolbarHTML();
+  el.querySelectorAll("button[data-cmd]").forEach(btn => {
+    btn.addEventListener("mousedown", e => e.preventDefault());
+    btn.addEventListener("click", () => { runFmtCmd(btn.dataset.cmd); updateSelToolbar(); });
+  });
+  document.addEventListener("selectionchange", updateSelToolbar);
+}
+function updateSelToolbar() {
+  const el = $("#selToolbar"); if (!el) return;
+  const s = getSelection();
+  if (!s || s.isCollapsed || !s.rangeCount || s.toString().trim() === "") { el.classList.remove("show"); return; }
+  const anchor = s.anchorNode; const c = anchor && (anchor.nodeType === 1 ? anchor : anchor.parentElement)?.closest(".bc[contenteditable]");
+  if (!c) { el.classList.remove("show"); return; }
+  const r = s.getRangeAt(0).getBoundingClientRect();
+  if (!r.width && !r.height) { el.classList.remove("show"); return; }
+  el.classList.add("show");
+  const ew = el.offsetWidth || 160;
+  el.style.left = Math.min(Math.max(8, r.left + r.width / 2 - ew / 2), innerWidth - ew - 8) + "px";
+  el.style.top = Math.max(8, r.top - el.offsetHeight - 8) + "px";
+}
+initSelToolbar();
+
 /* ── görsel ekleme ── */
 let imgTarget = null;
 function insertImageFromFile(note, afterB, file) {
@@ -1563,10 +1671,14 @@ function openSlash(note, b, c, q) {
   slash.items = BLOCK_TYPES.filter(t => !q || norm(t.label).includes(norm(q)) || t.kw.includes(norm(q)));
   const menu = $("#slashMenu");
   if (!slash.items.length) { closeSlash(); return; }
-  menu.innerHTML = slash.items.map((t, i) => `
+  let lastCat = null;
+  menu.innerHTML = slash.items.map((t, i) => {
+    const group = t.cat !== lastCat ? (lastCat = t.cat, `<div class="slash-group">${t.cat}</div>`) : "";
+    return `${group}
     <div class="slash-item ${i === 0 ? "sel" : ""}" data-i="${i}">
       <span class="ic">${t.ic}</span><span><b>${t.label}</b><span>${t.desc}</span></span>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   menu.classList.add("show");
   const r = c.getBoundingClientRect();
   const mh = Math.min(300, slash.items.length * 44 + 10);
