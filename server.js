@@ -888,11 +888,40 @@ function html(res, code, body, headers = {}) {
   res.end(body);
 }
 
+/* ── taban HTTP güvenlik başlıkları — her yanıta uygulanır (aşağıda writeHead sarmalanarak,
+   tek tek her handler'a dokunmadan). CSP, uygulamanın tek-dosya inline <script>/<style>
+   mimarisiyle (nonce/hash yok) uyumlu tutuldu — 'unsafe-inline' bu yüzden zorunlu, yani
+   inline-script XSS'i engellemiyor, ama clickjacking (frame-ancestors), yabancı kaynak
+   yükleme (script/style/connect/img "self" dışına çıkamaz) ve base-tag/form-action
+   saldırılarına karşı gerçek koruma sağlıyor. Mikrofon (dikte + toplantı kaydı) hariç
+   kullanılmayan tarayıcı API'leri Permissions-Policy ile kapatıldı. ── */
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Strict-Transport-Security": "max-age=15552000; includeSubDomains",
+  "Permissions-Policy": "microphone=(self), camera=(), geolocation=(), payment=(), usb=()",
+  "Content-Security-Policy": [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; "),
+};
+
 /* ── sunucu ── */
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const p = url.pathname;
   const ip = req.headers["cf-connecting-ip"] || req.socket.remoteAddress || "?";
+  const origWriteHead = res.writeHead.bind(res);
+  res.writeHead = (code, headers) => origWriteHead(code, { ...SECURITY_HEADERS, ...headers });
 
   try {
     if (p === "/healthz") { res.writeHead(200, { "Content-Type": "text/plain" }); res.end("ok"); return; }
@@ -1380,7 +1409,7 @@ http.createServer(async (req, res) => {
       return;
     }
 
-    if (p === "/" || /^\/not\/[a-zA-Z0-9_-]+$/.test(p) || p === "/gorevler" || p === "/takvim") {
+    if (p === "/" || /^\/not\/[a-zA-Z0-9_-]+$/.test(p) || p === "/gorevler" || p === "/takvim" || p === "/notlar") {
       const user = authedUser(req);
       if (!user) { res.writeHead(302, { Location: "/login?return=" + encodeURIComponent(p) }); res.end(); return; }
       html(res, 200, renderIndex(user));

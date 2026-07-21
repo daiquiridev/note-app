@@ -291,7 +291,7 @@ input,textarea{font:inherit;color:inherit}
 /* ── Takvim ─────────────────────────────── */
 .cal-wrap{max-width:720px;margin:0 auto;padding:0 10px}
 .cal-top{display:flex;align-items:center;gap:8px;padding:14px 0}
-.cal-top h1{font-size:30px;font-weight:750;letter-spacing:-.5px;flex:1}
+.cal-top h1{font-size:30px;font-weight:750;letter-spacing:-.5px;flex:1;padding:0}
 .cal-nav{padding:7px;border-radius:9px;background:var(--glass2);border:1px solid var(--border);line-height:0}
 .cal-nav:hover{background:var(--glass3)}
 .cal-nav svg{width:15px;height:15px;stroke:var(--soft)}
@@ -299,6 +299,12 @@ input,textarea{font:inherit;color:inherit}
 .cal-today{font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:9px;background:var(--glass2);
   border:1px solid var(--border);color:var(--soft);margin-left:4px}
 .cal-today:hover{background:var(--glass3)}
+.view-toggle{display:flex;gap:4px;margin-left:8px}
+.view-toggle button{padding:7px;border-radius:9px;background:var(--glass2);border:1px solid var(--border);line-height:0}
+.view-toggle button:hover{background:var(--glass3)}
+.view-toggle button.on{background:var(--accent-soft);border-color:var(--accent)}
+.view-toggle svg{width:15px;height:15px;stroke:var(--soft)}
+.view-toggle button.on svg{stroke:var(--accent)}
 .cal-card{padding:14px;border-radius:20px;background:var(--glass);backdrop-filter:var(--blur);
   -webkit-backdrop-filter:var(--blur);border:1px solid var(--line);box-shadow:0 10px 28px rgba(110,120,105,.06)}
 .cal-week{display:grid;grid-template-columns:repeat(7,1fr);font-size:10.5px;color:var(--muted);
@@ -924,11 +930,11 @@ function renderSidebar() {
   const match = n => !q || (n.title + " " + n.blocks.map(b => plain(b.html)).join(" ")).toLowerCase().includes(q);
   const open = state.tasks.filter(t => !t.done).length;
   let html = `
-    <div class="nav-item ${view.mode === "tasks" ? "active" : ""}" data-nav="tasks">
+    <div class="nav-item ${["tasks", "cal"].includes(view.mode) ? "active" : ""}" data-nav="tasks">
       ${ICONS.check}<span class="t">Görevler</span>${open ? `<span class="badge">${open}</span>` : ""}
     </div>
-    <div class="nav-item ${view.mode === "cal" ? "active" : ""}" data-nav="cal">
-      ${ICONS.cal}<span class="t">Takvim</span>
+    <div class="nav-item ${view.mode === "notes" ? "active" : ""}" data-nav="notes">
+      ${ICONS.doc}<span class="t">Notlar</span>
     </div>`;
   const item = (n, ind) => `
     <div class="nav-item ${ind ? "ind" : ""} ${view.mode === "note" && view.noteId === n.id ? "active" : ""}" data-note="${n.id}">
@@ -970,7 +976,11 @@ $("#navList").addEventListener("click", e => {
   const fold = e.target.closest("[data-fold]");
   if (fold) { toggleFold(fold.dataset.fold); return; }
   const nav = e.target.closest("[data-nav]");
-  if (nav) { nav.dataset.nav === "cal" ? openCal() : openTasks(); return; }
+  if (nav) {
+    if (nav.dataset.nav === "notes") { openAllNotes(); return; }
+    tasksViewMode === "cal" ? openCal() : openTasks();
+    return;
+  }
   const it = e.target.closest("[data-note]");
   if (it) openNote(it.dataset.note);
 });
@@ -1239,7 +1249,22 @@ function blockEl(note, b) {
     const imgItem = [...(cd.items || [])].find(it => it.type && it.type.startsWith("image/"));
     e.preventDefault();
     if (imgItem) { insertImageFromFile(note, b, imgItem.getAsFile()); return; }
-    document.execCommand("insertText", false, cd.getData("text/plain"));
+    const text = cd.getData("text/plain");
+    // kod bloğunda satırları koru (tek blok, gerçek yeni satırlarla) — bölme yalnızca
+    // metin bloklarında Notion tarzı "her satır kendi bloğu" davranışı için
+    if (b.type === "code" || !text.includes("\n")) {
+      document.execCommand("insertText", false, text);
+      return;
+    }
+    let lines = text.split(/\r\n|\r|\n/);
+    if (lines[lines.length - 1] === "") lines.pop(); // sondaki tek boş satırı at
+    document.execCommand("insertText", false, lines[0]);
+    b.html = c.innerHTML;
+    const keepType = ["bullet", "num", "todo"].includes(b.type) ? b.type : "p";
+    let afterId = b.id;
+    for (let i = 1; i < lines.length; i++) {
+      afterId = insertBlockAfter(note, afterId, keepType, esc(lines[i])).id;
+    }
   });
   body.appendChild(c);
   el.appendChild(body);
@@ -1678,6 +1703,7 @@ function openTaskFromSearch(id) {
 function openTasks() {
   stopMic(); stopMeetSTT();
   view = { mode: "tasks", noteId: null };
+  tasksViewMode = "tasks";
   ["btnMic", "btnMeetSTT", "btnSummarize", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
   const open = state.tasks.filter(t => !t.done);
   const done = state.tasks.filter(t => t.done);
@@ -1685,7 +1711,7 @@ function openTasks() {
   const todayCnt = open.filter(t => t.due && new Date(t.due).toDateString() === new Date().toDateString()).length;
   $("#content").innerHTML = `
     <div class="tasks-wrap">
-      <h1>Görevler</h1>
+      <div class="cal-top"><h1>Görevler</h1>${viewToggleHTML("tasks")}</div>
       <div class="statbar">
         <span>${ICONS.check}<b>${open.length}</b> açık</span><i></i>
         <span>${ICONS.cal}<b>${todayCnt}</b> bugün</span><i></i>
@@ -1709,6 +1735,7 @@ function openTasks() {
   $("#clearDone")?.addEventListener("click", () => {
     state.tasks = state.tasks.filter(t => !t.done); save(); openTasks();
   });
+  bindViewToggle();
   renderSidebar();
   setRoute("/gorevler");
 }
@@ -1885,9 +1912,21 @@ setInterval(() => {
 
 /* ═══════════ takvim ═══════════ */
 let calCur = null, calSel = null;
+let tasksViewMode = "tasks"; // "tasks" | "cal" — Görevler/Takvim tek sidebar girdisinin hangi alt görünümü açacağını hatırlar
+function viewToggleHTML(mode) {
+  return `<div class="view-toggle">
+    <button id="vtList" class="${mode === "tasks" ? "on" : ""}" title="Liste görünümü">${ICONS.check}</button>
+    <button id="vtCal" class="${mode === "cal" ? "on" : ""}" title="Takvim görünümü">${ICONS.cal}</button>
+  </div>`;
+}
+function bindViewToggle() {
+  $("#vtList").onclick = () => openTasks();
+  $("#vtCal").onclick = () => openCal();
+}
 function openCal() {
   stopMic(); stopMeetSTT();
   view = { mode: "cal", noteId: null };
+  tasksViewMode = "cal";
   ["btnMic", "btnMeetSTT", "btnSummarize", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
   const now = new Date();
   if (!calCur) {
@@ -1954,6 +1993,7 @@ function renderCal() {
         <span class="cal-month">${monthName}</span>
         <button class="cal-nav" id="calNext"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
         <button class="cal-today" id="calToday">Bugün</button>
+        ${viewToggleHTML("cal")}
       </div>
       <div class="cal-card">
         <div class="cal-week">${["Pzt","Sal","Çar","Per","Cum","Cmt","Paz"].map(g => `<span>${g}</span>`).join("")}</div>
@@ -1967,6 +2007,7 @@ function renderCal() {
   $("#calPrev").onclick = () => calShift(-1);
   $("#calNext").onclick = () => calShift(1);
   $("#calToday").onclick = () => { calCur = null; openCal(); };
+  bindViewToggle();
   $$(".cal-cell[data-day]").forEach(c => c.onclick = () => { calSel = +c.dataset.day; renderCal(); });
   $$(".cal-item").forEach(el => el.onclick = () => {
     if (el.dataset.note) openNote(el.dataset.note);
@@ -1975,6 +2016,34 @@ function renderCal() {
       if (t) { t.done = !t.done; if (t.done) t.notified = true; t.updated = Date.now(); save(); renderCal(); renderSidebar(); }
     }
   });
+}
+
+/* ═══════════ notlar (tüm notlar, klasöre göre gruplu) ═══════════ */
+function openAllNotes() {
+  stopMic(); stopMeetSTT();
+  view = { mode: "notes", noteId: null };
+  ["btnMic", "btnMeetSTT", "btnSummarize", "btnPin", "btnDelete"].forEach(b => $("#" + b).style.display = "none");
+  const sortU = (a, b) => b.updated - a.updated;
+  const row = n => `
+    <div class="cal-item" data-note="${n.id}">
+      ${n.type === "meeting" ? ICONS.users : ICONS.doc}
+      <span class="txt">${esc(n.title) || "Başlıksız"}</span>
+      <span class="time">${fmtRel(n.updated)}</span>
+    </div>`;
+  const groups = state.folders
+    .map(f => ({ name: f.name, notes: state.notes.filter(n => n.folderId === f.id).sort(sortU) }))
+    .filter(g => g.notes.length);
+  const loose = state.notes.filter(n => !n.folderId).sort(sortU);
+  $("#content").innerHTML = `
+    <div class="tasks-wrap">
+      <div class="cal-top"><h1>Notlar</h1></div>
+      ${!state.notes.length ? `<div class="tasks-empty">${ICONS.doc}<br>Henüz not yok.<br>Yukarıdan ilk notunu oluştur.</div>` : ""}
+      ${groups.map(g => `<div class="task-group-label">${esc(g.name)} · ${g.notes.length}</div>${g.notes.map(row).join("")}`).join("")}
+      ${loose.length ? `<div class="task-group-label">${state.folders.length ? "Diğer" : "Notlar"} · ${loose.length}</div>${loose.map(row).join("")}` : ""}
+    </div>`;
+  $$(".cal-item[data-note]").forEach(el => el.onclick = () => openNote(el.dataset.note));
+  renderSidebar();
+  setRoute("/notlar");
 }
 
 /* ═══════════ mikrofon (Türkçe sesli yazdırma) ═══════════ */
@@ -2136,7 +2205,8 @@ function stopMeetSTT(reason) {
 $("#btnMeetSTT").onclick = () => meetRecs ? stopMeetSTT() : startMeetSTT();
 /* ═══════════ AI özeti + aksiyon çıkarma ═══════════ */
 function noteToPlainText(n) {
-  return (n.blocks || []).map(b => {
+  // AI özeti blokları (kendi çıktısı) hariç — yoksa "özeti tekrar özetle" sonsuz döngüsü olur
+  return (n.blocks || []).filter(b => !b.aiSummary).map(b => {
     const t = plain(b.html);
     if (b.type === "todo") return (b.checked ? "[x] " : "[ ] ") + t;
     if (b.type === "bullet") return "- " + t;
@@ -2170,8 +2240,10 @@ function applySummary(n, raw) {
   if (!summaryLines.length) { toast("Özet boş döndü"); return; }
 
   const dateStr = new Date().toLocaleDateString("tr-TR", { day: "numeric", month: "long" });
-  const toggleBlock = { id: uid(), type: "toggle", html: "AI Özeti — " + dateStr, collapsed: false };
-  const childBlocks = summaryLines.map(line => ({ id: uid(), type: "bullet", html: esc(line), indent: 1 }));
+  const toggleBlock = { id: uid(), type: "toggle", html: "AI Özeti — " + dateStr, collapsed: false, aiSummary: true };
+  const childBlocks = summaryLines.map(line => ({ id: uid(), type: "bullet", html: esc(line), indent: 1, aiSummary: true }));
+  // önceki AI özetini değiştir — yoksa her tekrar tıklamada bir öncekinin üstüne yenisi birikir
+  n.blocks = n.blocks.filter(b => !b.aiSummary);
   n.blocks.unshift(toggleBlock, ...childBlocks);
   n.updated = Date.now();
   rerenderBlocks(n);
@@ -2613,6 +2685,7 @@ function renderPalette(q) {
     { icon: ICONS.trash,  label: "Şablonları yönet",          kw: "sablon template sil yonet", run: manageTemplates },
     { icon: ICONS.check,  label: "Görevleri aç",             kw: "gorev task yapilacak",      run: openTasks },
     { icon: ICONS.cal,    label: "Takvimi aç",               kw: "takvim calendar ay ajanda", run: openCal },
+    { icon: ICONS.doc,    label: "Notları aç",                kw: "notlar notes tum liste",   run: openAllNotes },
     { icon: ICONS.folder, label: "Yeni klasör",              kw: "klasor folder yeni marka",  run: newFolder },
     { icon: ICONS.folder, label: "Notu klasöre taşı",        kw: "tasi klasor move nota",     run: () => view.noteId ? moveNoteToFolder(view.noteId) : toast("Önce bir not aç") },
     ...(CLOUD ? [{ icon: ICONS.moveTo, label: "Notu başka projeye taşı", kw: "tasi proje move is kisisel project", run: () => view.noteId ? moveNoteToProject(view.noteId) : toast("Önce bir not aç") }] : []),
@@ -2811,6 +2884,7 @@ function hydrate() {
   if (routeFromLocation()) return;
   if (view.mode === "tasks") openTasks();
   else if (view.mode === "cal") openCal();
+  else if (view.mode === "notes") openAllNotes();
   else if (view.mode === "note" && noteById(view.noteId)) openNote(view.noteId);
   else state.notes.length ? openNote([...state.notes].sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated))[0].id) : showWelcome();
 }
@@ -2825,6 +2899,7 @@ function routeFromLocation() {
   if (m && noteById(m[1])) { openNote(m[1]); return true; }
   if (path === "/gorevler") { openTasks(); return true; }
   if (path === "/takvim") { openCal(); return true; }
+  if (path === "/notlar") { openAllNotes(); return true; }
   return false;
 }
 window.addEventListener("popstate", () => { if (!routeFromLocation()) showWelcome(); });
