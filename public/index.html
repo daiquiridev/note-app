@@ -869,6 +869,7 @@ state.folders = state.folders || [];
 state.collapsed = state.collapsed || [];
 state.templates = state.templates || [];
 let view = { mode: "note", noteId: null };   // mode: note | tasks | cal | welcome
+let renderedNote = { id: null, updated: null };   // en son openNote() ile ekrana çizilen not — sync sonrası içerik değişmediyse gereksiz yeniden çizimi (flicker) önlemek için
 const expandedTasks = new Set();   // görevlerde açıklama alanı açık olanlar (sayfa yüklemesi süresince)
 let saveTimer = null, undoBuf = null;
 
@@ -1147,6 +1148,7 @@ function openNote(id, focus) {
   if (focus === "title") $("#titleInput").focus();
   else if (focus === "content") { const first = n.blocks.find(b => b.type !== "h3"); if (first) focusBlock(first.id); }
   setRoute("/not/" + id);
+  renderedNote = { id: n.id, updated: n.updated };
 }
 function renderBacklinks(n) {
   const el = $("#backlinks"); if (!el) return;
@@ -2012,7 +2014,10 @@ setInterval(() => {
   for (const t of state.tasks) {
     if (t.done || !t.remind || t.notified || !t.due) continue;
     if (new Date(t.due).getTime() <= now) {
-      t.notified = true; dirty = true;
+      // updated'ı da ilerlet — yoksa sync birleştirmesi "updated" değişmediği için bu
+      // değişikliği kabul etmez, bir sonraki senkronizasyonda notified eski haline
+      // (false) döner ve hatırlatıcı sonsuz döngüde tekrar tekrar tetiklenir
+      t.notified = true; t.updated = now; dirty = true;
       if ("Notification" in window && Notification.permission === "granted") {
         try { new Notification("⏰ defter. hatırlatıcı", { body: t.text }); } catch {}
       }
@@ -2987,17 +2992,27 @@ function isActivelyEditingNote() {
   return view.mode === "note" && document.activeElement &&
     (document.activeElement.closest?.("#blocks") || document.activeElement.id === "titleInput");
 }
+let didInitialRoute = false;
 function hydrate() {
   applyTheme(); applyAccent(); renderSidebar();
   // sunucudan "değişiklik var" sinyaliyle gelen bir yenileme, tam o an bir bloğa/başlığa
   // yazarken notu yeniden açıp imleci/odağı koparmasın — state zaten güncellendi, görsel
   // yenileme kullanıcı yazmayı bırakınca (blur/navigasyon) doğal olarak gerçekleşecek
   if (isActivelyEditingNote() && noteById(view.noteId)) return;
-  if (routeFromLocation()) return;
+  // routeFromLocation yalnızca ilk yüklemede URL'i çözmek için gerekli (ör. doğrudan
+  // /not/xyz'e girilmesi); her hydrate() çağrısında (her senkronizasyonda) tekrar
+  // çalıştırılırsa aynı URL için notu içerik değişmese bile durmadan yeniden açar —
+  // bu da her senkronizasyonda not alanının flicker'lamasına yol açan asıl sebepti
+  if (!didInitialRoute) { didInitialRoute = true; if (routeFromLocation()) return; }
   if (view.mode === "tasks") openTasks();
   else if (view.mode === "cal") openCal();
   else if (view.mode === "notes") openAllNotes();
-  else if (view.mode === "note" && noteById(view.noteId)) openNote(view.noteId);
+  else if (view.mode === "note" && noteById(view.noteId)) {
+    const n = noteById(view.noteId);
+    // içerik zaten ekranda görüneninle aynıysa (bu sync note'u değiştirmemiş, başka bir
+    // öğe yüzünden geldi) yeniden çizme — flicker'a ve scroll/seçim kaybına yol açar
+    if (n.id !== renderedNote.id || n.updated !== renderedNote.updated) openNote(view.noteId);
+  }
   else state.notes.length ? openNote([...state.notes].sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated))[0].id) : showWelcome();
 }
 
